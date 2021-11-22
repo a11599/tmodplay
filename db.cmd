@@ -1,0 +1,1 @@
+C:\DOSBox-X\dosbox-x.exe -c mount c:\Dev\asm\dist -conf C:\Dev\asm\dosbox-x.conf
