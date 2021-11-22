@@ -1363,14 +1363,14 @@ mod_swt_render_direct:
 
 	push es
 	push fs
+	push edi
+
 	mov ax, ds
 	mov es, ax
 	mov fs, [state(voltab_seg)]
 
 	; ---------------------------------------------------------------------
-	; Render samples to wavetable render buffer
-
-	push edi
+	; Render samples to output device buffer
 
 	mov ebx, edi
 	sub ebx, [mod.instance_addr]
@@ -1436,7 +1436,6 @@ mod_swt_render_direct:
 
 .exit_render:
 	pop edi
-
 	pop fs
 	pop es
 
