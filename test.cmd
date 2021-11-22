@@ -1,1 +1,1 @@
-C:\DOSBox-X\dosbox-x.exe c:\Dev\asm\dist\t.bat -c mount c:\Dev\asm\dist -conf C:\Dev\asm\dosbox-x.conf
+C:\DOSBox-X\dosbox-x.exe c:\Dev\tmodplay\dist\t.bat -c mount c:\Dev\tmodplay\dist -conf C:\Dev\tmodplay\dosbox-x.conf
