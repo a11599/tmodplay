@@ -11,14 +11,15 @@
 
 cpu 386
 
-%ifenv DEBUG_BUILD
+%include "debug/log.inc"
+
+%ifdef __DEBUG__
 
 MAX_LOG_LEN	EQU 512			; Absolute max. len of any log message
 
 %include "system/api/string.inc"
 %include "system/api/file.inc"
 
-segment debug public use16 align=16
 segment debug
 
 
@@ -127,7 +128,6 @@ log_format:
 ; Data area
 ;==============================================================================
 
-segment debug_messages public use16 align=16
 segment debug_messages
 
 flags		db '+---+---+------+---+---+---+---+---+---+---+---+---+---+---+---+', 13, 10

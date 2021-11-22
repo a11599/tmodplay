@@ -695,7 +695,7 @@ merge_memory_blocks:
 ; Log and verify memory blocks to console (debug tool).
 ;------------------------------------------------------------------------------
 
-%ifenv DEBUG_BUILD
+%ifdef __DEBUG__
 
 global log_mcbs
 log_mcbs:

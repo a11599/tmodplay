@@ -121,7 +121,7 @@ setup:
 .save_out_format:
 	mov [state(output_format)], ah
 
-	%ifenv DEBUG_BUILD
+	%ifdef __DEBUG__
 
 	; Show configuration when debug is enabled
 

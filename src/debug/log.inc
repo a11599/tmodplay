@@ -14,6 +14,17 @@
 
 cpu 386
 
+%ifenv DEBUG_BUILD
+
+%ifndef __DEBUG__
+%define __DEBUG__
+[section debug_messages public class=DATA use16 align=1]
+[section debug public class=CODE use16 align=4]
+__SECT__
+%endif
+
+%endif
+
 
 ;------------------------------------------------------------------------------
 ; Log formatted string to stdout.
@@ -24,7 +35,7 @@ cpu 386
 ;------------------------------------------------------------------------------
 
 %macro	log 1-*
-	%ifenv DEBUG_BUILD
+	%ifdef __DEBUG__
 
 	[section debug_messages]
 
@@ -154,7 +165,7 @@ cpu 386
 ;------------------------------------------------------------------------------
 
 %macro	logf 0
-	%ifenv DEBUG_BUILD
+	%ifdef __DEBUG__
 
 	extern log_flags
 	call far log_flags
@@ -170,7 +181,7 @@ cpu 386
 ;------------------------------------------------------------------------------
 
 %macro	logmcbs 0
-	%ifenv DEBUG_BUILD
+	%ifdef __DEBUG__
 
 	extern log_mcbs
 	call far log_mcbs

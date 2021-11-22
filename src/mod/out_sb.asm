@@ -348,7 +348,7 @@ setup:
 .use_output_format:
 	mov byte [state(output_format)], ah
 
-	%ifenv DEBUG_BUILD
+	%ifdef __DEBUG__
 
 	; Show configuration when debug is enabled
 
@@ -1251,7 +1251,7 @@ mod_out_sb_fns	istruc mod_out_fns
 silence_sample	db 0x80
 blaster_env	db 'BLASTER', 0
 
-		%ifenv DEBUG_BUILD
+		%ifdef __DEBUG__
 
 type_sb2	db '2.0', 0
 type_sbpro	db 'Pro', 0

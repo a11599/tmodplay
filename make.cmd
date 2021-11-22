@@ -33,7 +33,7 @@ set /A cut+=1
 
 rem Compile .asm files into the obj folder and generate linker response file
 
-echo %ESC%[92mCompiling changed sources...%ESC%[0m
+echo %ESC%[92mCompiling sources...%ESC%[0m
 
 :compile
 mkdir obj >nul 2>nul
@@ -54,7 +54,7 @@ for /R "%rootdir%\src" %%F in (*) do (
     set "R=!F:~4,6!"
     set "F=obj\!F:~4!"
 
-    rem Build only .asm files except in folder devtools when not in debug mode
+    rem Build only .asm files except in folder debug when not in debug mode
 
     set "build=no"
     if /I not "!R!" == "debug\" set "build=yes"
@@ -74,7 +74,7 @@ for /R "%rootdir%\src" %%F in (*) do (
         if errorlevel 1 goto error
 
         set "link=no"
-        if /I not "!R!" == "devtools\" set "link=yes"
+        if /I not "!R!" == "debug\" set "link=yes"
         if defined DEBUG_BUILD set "link=yes"
 
         <nul set /p ="!separator!!O!">>"%rootdir%\obj\link.tmp"
