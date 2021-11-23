@@ -134,7 +134,8 @@ mod_sb_detect:
 
 	xor di, di			; DI: port
 	xor dx, dx			; DL: 8-bit DMA, DH: 16-bit DMA
-	xor cx, cx			; CL: IRQ, CH: type
+	xor cl, cl			; CL: IRQ
+	mov ch, -1			; CH: type
 
 	mov esi, blaster_env		; DS:ESI: "BLASTER"
 	call far sys_env_get_var
@@ -243,8 +244,8 @@ mod_sb_detect:
 	jz .error
 	test dl, dl			; 8-bit DMA
 	jz .error
-	test ch, ch			; Type
-	jz .error
+	cmp ch, -1			; Type
+	je .error
 	test dh, dh			; Fallback to 8-bit DMA if no 16-bit DMA
 	jnz .save_params
 	mov dh, dl
@@ -681,8 +682,13 @@ play:
 	write_dsp 0, 0x14
 	write_dsp 0x0c, 0
 	write_dsp 0x0c, 0
+	mov ecx, es:[0x46c]		; Save timer tick count
 
 .wait_sbpro_init:
+	mov eax, es:[0x46c]		; Wait for up to 2 ticks (110 ms)
+	sub eax, ecx
+	cmp eax, 2
+	ja .sbpro_mono
 	cmp byte [state(sbpro_init)], 1
 	je .wait_sbpro_init
 
@@ -815,7 +821,7 @@ stop:
 
 	call reset_dsp
 
-	sub dl, 0x08
+	add dl, 0x04
 	mov al, 0x0e
 	out dx, al
 	inc dx

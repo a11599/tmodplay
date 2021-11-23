@@ -321,6 +321,9 @@ parse_args:
 	mov byte [ebx + mod_out_params.irq], 5
 	mov byte [ebx + mod_out_params.dma], 1
 	mov byte [ebx + mod_out_params.dma + 1], 5
+	push ax
+	call far mod_sb_detect		; Detect SB parameters
+	pop ax
 	jmp .check_port
 
 .check_lpt_port:
