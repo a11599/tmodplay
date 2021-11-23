@@ -4,11 +4,11 @@
 
 cpu 386
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
-
 %include "mod/structs/global.inc"
 %include "debug/log.inc"
+
+segment modplayer public use16 class=CODE align=16
+segment modplayer
 
 
 ;------------------------------------------------------------------------------

@@ -4,11 +4,7 @@
 
 cpu 386
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
-
 %include "system/api/memory.inc"
-
 %include "mod/consts/public.inc"
 %include "mod/consts/player.inc"
 %include "mod/structs/global.inc"
@@ -18,7 +14,6 @@ segment modplayer
 %include "mod/api/out_none.inc"
 %include "mod/api/out_dac.inc"
 %include "mod/api/out_sb.inc"
-
 %include "debug/log.inc"
 
 ; Shortcut macros for easier access to nested structures
@@ -26,6 +21,9 @@ segment modplayer
 %define	file_fn(fn) mod.file_fns + mod_file_fns. %+ fn
 %define	out_fn(fn) mod.out_fns + mod_out_fns. %+ fn
 %define	sample(var) mod_sample. %+ var
+
+segment modplayer public use16 class=CODE align=16
+segment modplayer
 
 
 ;------------------------------------------------------------------------------

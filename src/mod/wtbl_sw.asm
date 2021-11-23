@@ -8,22 +8,20 @@
 
 cpu 386
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
-
 %include "system/api/memory.inc"
-
 %include "mod/structs/global.inc"
 %include "mod/consts/out.inc"
 %include "mod/consts/wtbl_sw.inc"
 %include "mod/structs/wtbl_sw.inc"
-
 %include "debug/log.inc"
 
 ; Shortcut macros for easier access to nested structures
 
 %define	state(var) mod.wt + mod_wtbl_sw. %+ var
 %define	sample(var) mod_sample. %+ var
+
+segment modplayer public use16 class=CODE align=16
+segment modplayer
 
 
 ;------------------------------------------------------------------------------

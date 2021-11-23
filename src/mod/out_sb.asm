@@ -20,15 +20,11 @@
 
 cpu 386
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
-
 %include "system/api/memory.inc"
 %include "system/api/pic.inc"
 %include "system/api/dma.inc"
 %include "system/api/env.inc"
 %include "system/api/string.inc"
-
 %include "mod/consts/global.inc"
 %include "mod/consts/public.inc"
 %include "mod/structs/global.inc"
@@ -38,7 +34,6 @@ segment modplayer
 %include "mod/api/convert.inc"
 %include "mod/api/wtbl_sw.inc"
 %include "mod/api/routine.inc"
-
 %include "debug/log.inc"
 
 ; Shortcut macros for easier access to nested structures
@@ -46,6 +41,9 @@ segment modplayer
 %define	state(var) mod.out_state + mod_out_sb_state. %+ var
 %define	params(var) mod.out_params + mod_out_params. %+ var
 %define	set_out_fn(name, lbl) at mod_out_fns. %+ name, dw %+ (lbl)
+
+segment modplayer public use16 class=CODE align=16
+segment modplayer
 
 
 ;------------------------------------------------------------------------------

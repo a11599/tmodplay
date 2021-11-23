@@ -9,7 +9,6 @@ cpu 386
 
 %include "system/api/memory.inc"
 %include "system/consts/file.inc"
-
 %include "debug/log.inc"
 
 segment system public use16 class=CODE align=16

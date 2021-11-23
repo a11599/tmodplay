@@ -17,5 +17,4 @@ extern mod_get_flags
 extern mod_play
 extern mod_stop
 extern mod_render
-
 extern mod_sb_detect

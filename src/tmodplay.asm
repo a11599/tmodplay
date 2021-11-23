@@ -5,9 +5,6 @@
 
 cpu 386
 
-segment app private use16 class=CODE align=16
-segment app
-
 %include "system/api/memory.inc"
 %include "system/api/file.inc"
 %include "system/api/env.inc"
@@ -18,6 +15,9 @@ segment app
 ; Shortcut macros for easier access to nested structures
 
 %define	set_file_fn(name, lbl) at mod_file_fns. %+ name, dw %+ (lbl), seg %+ (lbl)
+
+segment app private use16 class=CODE align=16
+segment app
 
 
 ;------------------------------------------------------------------------------

@@ -29,13 +29,9 @@
 
 cpu 386
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
-
 %include "system/api/memory.inc"
 %include "system/api/pit.inc"
 %include "system/api/pic.inc"
-
 %include "mod/consts/global.inc"
 %include "mod/consts/public.inc"
 %include "mod/structs/global.inc"
@@ -44,7 +40,6 @@ segment modplayer
 %include "mod/consts/out_dac.inc"
 %include "mod/api/wtbl_sw.inc"
 %include "mod/api/routine.inc"
-
 %include "debug/log.inc"
 
 ; Shortcut macros for easier access to nested structures
@@ -58,6 +53,9 @@ segment modplayer
 LPTST_CHN_LEFT	EQU 00000001b
 LPTST_CHN_RIGHT	EQU 00000010b
 LPTST_CHN_BOTH	EQU 00000011b
+
+segment modplayer public use16 class=CODE align=16
+segment modplayer
 
 
 ;------------------------------------------------------------------------------

@@ -4,10 +4,10 @@
 
 cpu 386
 
+%include "debug/log.inc"
+
 segment system public use16 class=CODE align=16
 segment system
-
-%include "debug/log.inc"
 
 
 ;------------------------------------------------------------------------------

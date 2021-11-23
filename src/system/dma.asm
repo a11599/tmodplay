@@ -4,15 +4,15 @@
 
 cpu 386
 
-segment system public use16 class=CODE align=16
-segment system
-
 %include "system/structs/dma.inc"
 %include "debug/log.inc"
 
 ; Shortcut macros for easier access to nested structures
 
 %define	port(register) dma_registers + dma_ports. %+ register
+
+segment system public use16 class=CODE align=16
+segment system
 
 
 ;------------------------------------------------------------------------------

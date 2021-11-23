@@ -9,26 +9,24 @@
 
 cpu 386
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
-
 %include "system/api/memory.inc"
 %include "system/api/pit.inc"
 %include "system/api/pic.inc"
-
 %include "mod/consts/global.inc"
 %include "mod/consts/public.inc"
 %include "mod/structs/global.inc"
 %include "mod/structs/out_none.inc"
 %include "mod/consts/out.inc"
 %include "mod/api/routine.inc"
-
 %include "debug/log.inc"
 
 ; Shortcut macros for easier access to nested structures
 
 %define	state(var) mod.out_state + mod_out_none_state. %+ var
 %define	set_out_fn(name, lbl) at mod_out_fns. %+ name, dw %+ (lbl)
+
+segment modplayer public use16 class=CODE align=16
+segment modplayer
 
 
 ;------------------------------------------------------------------------------

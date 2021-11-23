@@ -19,9 +19,6 @@
 
 cpu 386
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
-
 %include "mod/structs/global.inc"
 %include "mod/consts/routine.inc"
 %include "mod/consts/out.inc"
@@ -35,6 +32,9 @@ segment modplayer
 %define	sample(var) mod_sample. %+ var
 %define	out_fn(fn) mod.out_fns + mod_out_fns. %+ fn
 %define wflags(sample, mix) sample * 256 + mix
+
+segment modplayer public use16 class=CODE align=16
+segment modplayer
 
 
 ;------------------------------------------------------------------------------
