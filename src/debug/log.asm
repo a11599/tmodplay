@@ -3,7 +3,7 @@
 ;------------------------------------------------------------------------------
 ; -> DEBUG_BUILD environment variable: logging is only generated if it exists
 ;    If the environment variable is not defined, no debug-related code will be
-;    added to the code.
+;    added to the application.
 ;------------------------------------------------------------------------------
 ; These functions are not meant to be called directly. Use the log* macros in
 ; debug/log.inc instead.
@@ -11,7 +11,7 @@
 
 cpu 386
 
-%include "debug/log.inc"
+%include "debug/global.inc"
 
 %ifdef __DEBUG__
 
@@ -24,12 +24,87 @@ segment debug
 
 
 ;------------------------------------------------------------------------------
+; Setup logging. No log messages will be written until this function is called.
+;------------------------------------------------------------------------------
+; -> EAX - Logging flags
+;    DS:ESI - Pointer to ASCIIZ filename for LOG_FILE.
+; <- CF - Set if error
+;    EAX - Error code if CF set
+;------------------------------------------------------------------------------
+
+global log_setup
+log_setup:
+	push eax
+
+	mov cs:[flags], eax
+	test al, LOG_FILE
+	jz .console			; Log to console
+	test al, LOG_APPEND		; Set file open mode
+	setz al				; AL: 1 when overwrite, 0 when append
+	add al, al			; AL: 2 when overwrite, 0 when append
+	add al, 1			; AL: 3 when overwrite, 1 when append
+	mov al, 3
+	call far sys_file_open		; Open the file
+	jc .error
+	mov cs:[file_handle], eax
+
+.done:
+	clc
+	pop eax
+
+.exit:
+	retf
+
+.error:
+	mov dword cs:[file_handle], 1
+	add sp, 4
+	stc
+	jmp .exit
+
+.console:
+	test al, LOG_STDERR
+	jz .stderr
+	mov dword cs:[file_handle], 1
+	jmp .done
+
+.stderr:
+	mov dword cs:[file_handle], 2
+	jmp .done
+
+
+;------------------------------------------------------------------------------
+; Shutdown logging. Should be called before exiting to DOS. No messages will be
+; logged after this call.
+;------------------------------------------------------------------------------
+
+global log_shutdown
+log_shutdown:
+	push eax
+	push ebx
+
+	cmp dword cs:[file_handle], 4	; Not an actual file, no need to close
+	jbe .exit
+
+	mov ebx, cs:[file_handle]
+	call far sys_file_close		; Close logfile
+
+.exit:
+	pop ebx
+	pop eax
+	retf
+
+
+;------------------------------------------------------------------------------
 ; Log flags to the standard output.
 ;------------------------------------------------------------------------------
 
 global log_flags
 log_flags:
 	pushf
+
+	cmp dword cs:[file_handle], 0	; Debug not properly initialized, exit
+	je .noop
+
 	push ax
 	push bx
 	push esi
@@ -40,7 +115,7 @@ log_flags:
 	pushf
 	pop ax
 
-	mov bx, debug_messages
+	mov bx, debug_data
 	mov ds, bx
 	mov bp, sp
 	mov bh, 16
@@ -54,16 +129,22 @@ log_flags:
 	dec bh
 	jnz .check_flags_loop
 
-	mov esi, flags			; Format flags string
+	mov esi, flags_fmt		; Format flags string
 	mov edi, buf
 	call far sys_str_format
 	mov sp, bp
 	mov esi, buf
 	call far sys_str_len		; ECX: length of string
 	mov ah, 0x40
-	mov bx, 1			; Write to file handle 1 (stdout)
+	mov bx, cs:[file_handle]
 	mov dx, si			; DS:DX: pointer to string
 	int 0x21
+	test dword cs:[flags], LOG_AUTOCOMMIT
+	jz .done
+	mov ah, 0x68			; Commit write to log file
+	int 0x21
+
+.done:
 
 	pop ds
 	pop bp
@@ -71,6 +152,8 @@ log_flags:
 	pop esi
 	pop bx
 	pop ax
+
+.noop:
 	popf
 	retf
 
@@ -78,11 +161,14 @@ log_flags:
 ;------------------------------------------------------------------------------
 ; Log formatted text to standard output.
 ;------------------------------------------------------------------------------
-; -> SI - Offset of ASCIIZ string message in debug_messages segment
+; -> SI - Offset of ASCIIZ string message in debug_data segment
 ;------------------------------------------------------------------------------
 
 global log_format
 log_format:
+	cmp dword cs:[file_handle], 0	; Debug not properly initialized, exit
+	je .noop
+
 	push eax
 	push bx
 	push ecx
@@ -95,9 +181,9 @@ log_format:
 	mov ax, ds
 	shl eax, 4			; EAX: DS segment linear address
 	xor ecx, ecx
-	mov cx, debug_messages
+	mov cx, debug_data
 	mov bx, cx
-	shl ecx, 4			; ECX: debug_messages linear address
+	shl ecx, 4			; ECX: debug_data linear address
 	movzx esi, si
 	add esi, ecx
 	sub esi, eax			; DS:ESI: source string to format
@@ -110,10 +196,15 @@ log_format:
 	mov esi, buf
 	call far sys_str_len		; ECX: length of string
 	mov ah, 0x40
-	mov bx, 1			; Write to file handle 1 (stdout)
+	mov bx, cs:[file_handle]
 	mov dx, si			; DS:DX: pointer to string
 	int 0x21
+	test dword cs:[flags], LOG_AUTOCOMMIT
+	jz .done
+	mov ah, 0x68			; Commit write to log file
+	int 0x21
 
+.done:
 	pop ds
 	pop edi
 	pop esi
@@ -121,6 +212,8 @@ log_format:
 	pop ecx
 	pop bx
 	pop eax
+
+.noop:
 	retn
 
 
@@ -128,9 +221,13 @@ log_format:
 ; Data area
 ;==============================================================================
 
-segment debug_messages
+		alignb 4
+flags		dd 0
+file_handle	dd 0
 
-flags		db '+---+---+------+---+---+---+---+---+---+---+---+---+---+---+---+', 13, 10
+segment debug_data
+
+flags_fmt	db '+---+---+------+---+---+---+---+---+---+---+---+---+---+---+---+', 13, 10
 		db '| - | N | IOPL | O | D | I | T | S | Z | - | A | - | P | - | C |', 13, 10
 		db '| {u8} | {u8} |  {u8}{u8}  | {u8} | {u8} | {u8} | {u8} | {u8} | {u8} | {u8} | {u8} | {u8} | {u8} | {u8} | {u8} |', 13, 10
 		db '+---+---+------+---+---+---+---+---+---+---+---+---+---+---+---+', 13, 10, 0

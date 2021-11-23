@@ -3,25 +3,23 @@
 ;------------------------------------------------------------------------------
 ; -> DEBUG_BUILD environment variable: logging is only generated if it exists
 ;    If the environment variable is not defined, no debug-related code will be
-;    added to the code.
+;    added to the application.
 ;------------------------------------------------------------------------------
 ; All macros can be called at any point in the code, they don't alter flags or
 ; registers. Macros emit a far call at the point of inclusion (taking 5 bytes)
 ; into the current segment. The logging code itself will be output to the
 ; "debug" segment and log messages (via the log macro) are put into the
-; "debug_messages" segment.
+; "debug_data" segment.
 ;==============================================================================
 
 cpu 386
 
-%ifenv DEBUG_BUILD
+%include "debug/global.inc"
 
-%ifndef __DEBUG__
-%define __DEBUG__
-[section debug_messages public class=DATA use16 align=1]
-[section debug public class=CODE use16 align=4]
-__SECT__
-%endif
+%ifdef __DEBUG__
+
+extern log_setup
+extern log_shutdown
 
 %endif
 
@@ -37,7 +35,7 @@ __SECT__
 %macro	log 1-*
 	%ifdef __DEBUG__
 
-	[section debug_messages]
+	[section debug_data]
 
 %%message	db %1, 0
 

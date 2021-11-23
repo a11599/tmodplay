@@ -40,6 +40,14 @@ segment app
 	mov ds, ax
 	mov es, ax
 
+	; Initialize logging
+
+	%ifdef __DEBUG__
+	mov eax, LOG_FILE | LOG_AUTOCOMMIT
+	mov esi, logfile
+	call far log_setup
+	%endif
+
 	call far sys_file_get_buf_addr	; Save I/O buffer address rel. to DS
 	movzx eax, ax
 	shl eax, 4
@@ -90,6 +98,10 @@ segment app
 	jmp .exit
 
 .exit:
+	%ifdef __DEBUG__
+	call far log_shutdown
+	%endif
+
 	call far sys_file_shutdown
 	call far sys_mem_shutdown
 
@@ -849,6 +861,10 @@ file_fns	istruc mod_file_fns
 		set_file_fn(read, sys_file_read)
 		set_file_fn(close, sys_file_close)
 		iend
+
+		%ifdef __DEBUG__
+logfile		db 'tmodplay.log', 0
+		%endif
 
 
 ;==============================================================================
