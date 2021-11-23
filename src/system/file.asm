@@ -79,6 +79,7 @@ sys_file_shutdown:
 
 global sys_file_open
 sys_file_open:
+	push cx
 	push edx
 	push ds
 
@@ -108,7 +109,6 @@ sys_file_open:
 	; Filename is in extended memory, copy to conventional memory buffer
 
 	push ax
-	push cx
 	push esi
 	push di
 	push es
@@ -127,7 +127,6 @@ sys_file_open:
 	pop es
 	pop di
 	pop esi
-	pop cx
 	pop ax
 	jz .invalid_filename		; Buffer overflow, filename too long
 
@@ -139,6 +138,7 @@ sys_file_open:
 	cmp al, 3
 	jne .open
 	mov ah, 0x3c			; Create file
+	mov cx, 0x20			; Set default file attribute
 
 .open:
 	int 0x21
@@ -147,6 +147,7 @@ sys_file_open:
 .exit:
 	pop ds
 	pop edx
+	pop cx
 	retf
 
 .invalid_filename:
