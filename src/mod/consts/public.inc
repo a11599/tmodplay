@@ -27,10 +27,10 @@ MOD_OUT_SB	EQU 2			; Sound Blaster output
 
 MOD_NONE	EQU 0			; No sound (but still runs the player)
 
-MOD_DAC_SPEAKER	EQU 1			; PC speaker
-MOD_DAC_LPT	EQU 2			; Single mono LPT DAC
-MOD_DAC_LPTST	EQU 3			; Stereo LPT DAC on one port
-MOD_DAC_LPTDUAL	EQU 4			; Dual mono LPT DACs on two ports
+MOD_DAC_SPEAKER	EQU 0			; PC speaker
+MOD_DAC_LPT	EQU 1			; Single mono LPT DAC
+MOD_DAC_LPTST	EQU 2			; Stereo LPT DAC on one port
+MOD_DAC_LPTDUAL	EQU 3			; Dual mono LPT DACs on two ports
 
 MOD_SB_2	EQU 0			; Sound Blaster 2.0
 MOD_SB_PRO	EQU 1			; Sound Blaster Pro
