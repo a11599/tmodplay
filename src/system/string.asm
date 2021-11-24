@@ -615,6 +615,7 @@ sys_str_hex:
 ; - {c}: A single character.
 ; - {s[:length]}: A string up to "length" characters (default: entire string).
 ;   Placeholder value on stack is pointer to string relative to DS.
+; - {>}: Skip placeholder value without displaying anything.
 ;------------------------------------------------------------------------------
 ; For each of the placeholders, a value must be provided on the stack in the
 ; order of placeholders from top to bottom. The typical usage is:
@@ -706,6 +707,8 @@ sys_str_format:
 	je .char
 	cmp al, 's'			; String
 	je .string
+	cmp al, '>'			; Next placeholder value
+	je .skip_variable
 	jmp .skip_variable
 
 .int:
