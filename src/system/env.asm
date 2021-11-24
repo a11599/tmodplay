@@ -324,6 +324,37 @@ sys_env_get_named_arg:
 	jmp .exit
 
 
+;------------------------------------------------------------------------------
+; Returns the full path to the running executable.
+;------------------------------------------------------------------------------
+; <- DS:ESI - Pointer to ASCIIZ string containing the full path of the running
+;             executable.
+;------------------------------------------------------------------------------
+
+global sys_env_get_exe_path
+sys_env_get_exe_path:
+	push eax
+
+	cld
+
+	xor eax, eax
+	mov ax, ds
+	shl eax, 4
+	mov esi, cs:[env_addr]
+	sub esi, eax			; DS:ESI: DOS environment area
+	mov al, 0xff
+
+.find_exe_path_loop:
+	mov ah, al
+	a32 lodsb			; AX: previous + current character
+	test ax, ax			; Look for two consecutive NULs
+	jnz .find_exe_path_loop
+	a32 lodsw			; Skip number of strings
+
+	pop eax
+	retf
+
+
 ;==============================================================================
 ; Data area
 ;==============================================================================
