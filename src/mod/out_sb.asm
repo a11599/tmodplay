@@ -447,6 +447,10 @@ setup:
 	mul ebx
 	mov ebx, 1000
 	div ebx
+	cmp edx, 500			; Rounding
+	setae dl
+	movzx edx, dl
+	add eax, edx
 
 .check_buffer_size:
 	cmp eax, 5456			; Maximum safe buffer size
