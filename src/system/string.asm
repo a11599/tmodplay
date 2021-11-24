@@ -81,11 +81,55 @@ sys_str_reverse:
 
 
 ;------------------------------------------------------------------------------
-; Append a string at the end of another one.
+; Copy a string to a target buffer.
+;------------------------------------------------------------------------------
+; -> ECX - Maximum length of the buffer
+;    DS:ESI - Source ASCIIZ string
+;    DS:EDI - Target buffer
+;------------------------------------------------------------------------------
+
+global sys_str_copy
+sys_str_copy:
+	push ax
+	push ecx
+	push esi
+	push edi
+	push es
+
+	jecxz .done
+
+	cld
+
+	mov ax, ds
+	mov es, ax
+	dec ecx				; Leave room for terminating NUL
+
+.copy_loop:
+	a32 lodsb			; Get next char
+	a32 stosb			; Store in buffer
+	test al, al			; End of string?
+	loopnz .copy_loop, ecx		; No, continue until buffer is full
+	jz .done			; End of string, done
+
+	xor al, al			; Store terminating NUL
+	a32 stosb
+
+.done:
+	pop es
+	pop edi
+	pop esi
+	pop ecx
+	pop ax
+	retf
+
+
+;------------------------------------------------------------------------------
+; Append a string at the end of another one in place.
 ;------------------------------------------------------------------------------
 ; -> ECX - Maximum length of the appended string
 ;    DS:ESI - Source ASCIIZ string
-;    DS:EDI - Target ASCIIZ string to which the source will be appended in place
+;    DS:EDI - Target ASCIIZ string to which the source will be appended in
+;             place
 ;------------------------------------------------------------------------------
 
 global sys_str_append
@@ -171,6 +215,60 @@ sys_str_char_pos:
 
 .exit:
 	pop esi
+	pop ecx
+	pop ebx
+	retf
+
+.not_found:
+	pop eax
+	stc
+	jmp .exit
+
+
+;------------------------------------------------------------------------------
+; Find the last occurence of a character in a string.
+;------------------------------------------------------------------------------
+; -> AH - Character to search for
+;    ECX - Maximum number of characters to search
+;    DS:ESI - ASCIIZ string to find character within
+; <- CF - Set if character was not found
+;    EAX - Index of character's last occurence if CF is not set
+;------------------------------------------------------------------------------
+
+global sys_str_char_rpos
+sys_str_char_rpos:
+	push ebx
+	push ecx
+	push eax
+
+	jecxz .not_found		; ECX is zero, nothing to search
+
+	cld
+
+	mov ebx, esi			; EBX: offset of last occurence
+	push esi
+
+.find_loop:
+	a32 lodsb			; Get next character
+	test al, al
+	jz .check_find			; End of string: check if char found
+	cmp al, ah			; Found character?
+	loopne .find_loop, ecx		; Nope, try next
+	mov ebx, esi			; Found, update occurence offset
+	loop .find_loop, ecx
+
+.check_find:
+	pop esi
+	cmp ebx, esi			; Last occurence unchanged, not found
+	je .not_found
+
+	sub ebx, esi
+	dec ebx
+	add sp, 4			; Discard EAX from stack
+	mov eax, ebx
+	clc
+
+.exit:
 	pop ecx
 	pop ebx
 	retf
