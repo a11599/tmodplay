@@ -34,30 +34,41 @@ segment app
 	call far sys_file_setup		; File management
 	jc .sys_error
 
-	; Initialize segment registers
-
 	mov ax, app_data
-	mov ds, ax
-	mov es, ax
-
-	; Initialize logging
-
-	%ifdef __DEBUG__
-	mov eax, LOG_FILE | LOG_AUTOCOMMIT
-	mov esi, logfile
-	call far log_setup
-	%endif
+	mov ds, ax			; DS: data segment
+	mov es, ax			; ES: data segment
 
 	call far sys_file_get_buf_addr	; Save I/O buffer address rel. to DS
-	movzx eax, ax
+	xor eax, eax
+	mov ax, ds
 	shl eax, 4
 	sub ebx, eax
 	mov [io_buf_addr], ebx
 
+	; Initialize logging
+
+	%ifdef __DEBUG__		; Initialize logging
+	call far sys_env_get_exe_path	; Get path to running executable
+	mov ah, '.'
+	mov ecx, -1
+	call far sys_str_char_rpos	; Find . character
+	jc .set_logfile_name
+	lea ecx, [eax + 1]		; Copy before . when found
+
+.set_logfile_name:
+	mov edi, [io_buf_addr]		; DS:EDI: temp buffer
+	call far sys_str_copy		; Copy path before ., then append ".LOG"
+	mov dword [edi + ecx - 1], '.LOG'
+	mov byte [edi + ecx + 3], 0
+	mov esi, edi			; DS:ESI: pointer to logfile name
+	mov eax, LOG_FILE | LOG_AUTOCOMMIT
+	call far log_setup		; Setup logging
+	%endif
+
+	; Initialize player
+
 	mov esi, header			; Show application header
 	call echo
-
-	; Parse arguments for player
 
 	mov esi, arg_help		; Display usage if /? argument present
 	call far sys_env_get_named_arg
@@ -864,10 +875,6 @@ file_fns	istruc mod_file_fns
 		set_file_fn(read, sys_file_read)
 		set_file_fn(close, sys_file_close)
 		iend
-
-		%ifdef __DEBUG__
-logfile		db 'tmodplay.log', 0
-		%endif
 
 
 ;==============================================================================
