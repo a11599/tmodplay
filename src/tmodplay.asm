@@ -76,23 +76,45 @@ segment app
 	mov ebx, out_params		; Parse arguments
 	call parse_args
 	jc .exit
+	push esi			; Save filename
 
-	; Initialize MOD player
+	mov esi, outtab			; Display output device info
+	movzx eax, ax
+	call lookup_message		; DS:ESI: Output device info string
+	mov bp, sp
+	push dword [out_params + mod_out_params.port]
+	push dword [out_params + mod_out_params.port + 2]
+	push dword [out_params + mod_out_params.irq]
+	push dword [out_params + mod_out_params.irq + 1]
+	push dword [out_params + mod_out_params.dma]
+	push dword [out_params + mod_out_params.dma + 1]
+	mov edi, [io_buf_addr]
+	call far sys_str_format
+	mov sp, bp
+	mov esi, edi
+	call echo
 
-	log {'Initializing MOD player, requested sample rate: {u} Hz', 13, 10}, edx
-
-	mov edi, file_fns
+	mov edi, file_fns		; Setup modplayer
 	call far mod_setup
 	jc .mod_error
 
-	log {'Player initialized, actual sample rate: {u} Hz', 13, 10}, eax
+	mov esi, msg_samplerate		; Show samplerate info
+	mov edi, [io_buf_addr]
+	mov bp, sp
+	push eax
+	call far sys_str_format
+	mov sp, bp
+	mov esi, edi
+	call echo
+	mov esi, msg_loading		; Display name of MOD file
+	add bp, 4			; BP: pointer above pushed filename
+	call far sys_str_format
+	mov esi, edi
+	call echo
 
-	; Load the file
-
-	call far mod_load
+	pop esi				; Restore filename
+	call far mod_load		; Load the MOD file
 	jc .mod_error
-
-	log {'Module loaded successfully', 13, 10}
 
 	call far mod_get_flags
 	log {'Flags: {X}', 13, 10}, eax
@@ -126,12 +148,14 @@ segment app
 
 .sys_error:
 	mov esi, errtab_sys		; Display system error messages
-	call echo_error
+	call lookup_message
+	call echo
 	jmp .exit
 
 .mod_error:
 	mov esi, errtab_mod		; Display modplayer error messages
-	call echo_error
+	call lookup_message
+	call echo
 	jmp .exit
 
 
@@ -187,35 +211,33 @@ printf:
 
 
 ;------------------------------------------------------------------------------
-; Show error message for an error code.
+; Get message from lookup table
 ;------------------------------------------------------------------------------
-; -> EAX - Error code
-;    DS:ESI - Error message table
+; -> EAX - Lookup code
+;    DS:ESI - Code - message lookup table
+; <- DS:ESI - Pointer to message
 ;------------------------------------------------------------------------------
 
-echo_error:
+lookup_message:
 	push eax
 	push ebx
-	push esi
 
 	cld
 
-	mov ebx, eax
+	mov ebx, eax			; EBX: lookup code
 
-.find_error_loop:
+.find_message_loop:
 	a32 lodsd
 	test eax, eax
-	jz .echo
+	jz .echo			; End of table, return fallback pointer
 	cmp eax, ebx
-	je .echo
+	je .echo			; Code found
 	add esi, 4
-	jmp .find_error_loop
+	jmp .find_message_loop
 
 .echo:
-	mov esi, [esi]
-	call echo
+	mov esi, [esi]			; Return message pointer
 
-	pop esi
 	pop ebx
 	pop eax
 	retn
@@ -821,6 +843,21 @@ err_arg_amp	db 'Invalid amplification "{s}" for option {s}.', 13, 10
 err_arg_fname	db 'Please specify the name of the file to play.', 13, 10, 0
 err_args	db 13, 10, 'Type tmodplay /? for help.', 13, 10, 0
 
+errtab_mod	dd MOD_ERR_INVALID, err_mod_invalid
+		dd MOD_ERR_NB_CHN, err_mod_nb_chan
+		dd MOD_ERR_DEVICE, err_mod_device
+		dd 0x02, err_dos_02
+		dd 0x03, err_dos_03
+		dd 0x04, err_dos_04
+		dd 0x05, err_dos_05
+		dd 0x06, err_dos_06
+		dd 0x07, err_dos_07
+		dd 0x08, err_dos_08
+		dd 0x09, err_dos_09
+		dd 0x0a, err_dos_0a
+		dd 0x0f, err_dos_0f
+		dd 0, err_generic
+
 err_mod_invalid	db 'Invalid MOD file format.', 13, 10, 0
 err_mod_nb_chan	db 'Too many channels in the MOD file.', 13, 10, 0
 err_mod_device	db 'Cannot initialize output device.', 13, 10, 0
@@ -838,21 +875,6 @@ err_dos_0a	db 'Invalid environment.', 13, 10, 0
 err_dos_0f	db 'Invalid drive.', 13, 10, 0
 err_generic	db 'Unable to play the file.', 13, 10, 0
 
-errtab_mod	dd MOD_ERR_INVALID, err_mod_invalid
-		dd MOD_ERR_NB_CHN, err_mod_nb_chan
-		dd MOD_ERR_DEVICE, err_mod_device
-		dd 0x02, err_dos_02
-		dd 0x03, err_dos_03
-		dd 0x04, err_dos_04
-		dd 0x05, err_dos_05
-		dd 0x06, err_dos_06
-		dd 0x07, err_dos_07
-		dd 0x08, err_dos_08
-		dd 0x09, err_dos_09
-		dd 0x0a, err_dos_0a
-		dd 0x0f, err_dos_0f
-		dd 0, err_generic
-
 errtab_sys	dd SYS_ERR_V86, err_sys_v86
 		dd 0x02, err_dos_02
 		dd 0x03, err_dos_03
@@ -865,6 +887,28 @@ errtab_sys	dd SYS_ERR_V86, err_sys_v86
 		dd 0x0a, err_dos_0a
 		dd 0x0f, err_dos_0f
 		dd 0, err_generic
+
+		; Output devices
+
+out_unknown	db 'Initializing playback', 13, 10, 0
+out_speaker	db 'Using internal PC speaker', 13, 10, 0
+out_lpt		db 'Using parallel port DAC on port {X16}', 13, 10, 0
+out_lptst	db 'Using stereo parallel port DAC on port {X16}', 13, 10, 0
+out_lptdual	db 'Using dual parallel port DAC on ports {X16} and {X16}', 13, 10, 0
+out_sb2		db 'Using Sound Blaster 2.0 on port {X16}{>}, IRQ {u8}{>}, DMA {u8}', 13, 10, 0
+out_sbpro	db 'Using Sound Blaster Pro on port {X16}{>}, IRQ {u8}{>}, DMA {u8}', 13, 10, 0
+out_sb16	db 'Using Sound Blaster 16 on port {X16}{>}, IRQ {u8}{>}, DMA {>}{u8}', 13, 10, 0
+msg_samplerate	db 'Playback sampling rate: {u} Hz', 13, 10, 0
+msg_loading	db 'Loading file: {s}', 13, 10, 0
+
+outtab		dd MOD_OUT_DAC * 256 + MOD_DAC_SPEAKER, out_speaker
+		dd MOD_OUT_DAC * 256 + MOD_DAC_LPT, out_lpt
+		dd MOD_OUT_DAC * 256 + MOD_DAC_LPTST, out_lptst
+		dd MOD_OUT_DAC * 256 + MOD_DAC_LPTDUAL, out_lptdual
+		dd MOD_OUT_SB * 256 + MOD_SB_2, out_sb2
+		dd MOD_OUT_SB * 256 + MOD_SB_PRO, out_sbpro
+		dd MOD_OUT_SB * 256 + MOD_SB_16, out_sb16
+		dd 0, out_unknown
 
 		alignb 4		; Output device parameters
 out_params	db mod_out_params.strucsize dup (0)
