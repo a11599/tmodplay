@@ -147,6 +147,10 @@ segment app
 	jmp .exit
 
 .sys_error:
+	mov bx, app_data
+	mov ds, bx			; DS: data segment
+	mov esi, header			; Show application header
+	call echo
 	mov esi, errtab_sys		; Display system error messages
 	call lookup_message
 	call echo
@@ -861,7 +865,7 @@ errtab_mod	dd MOD_ERR_INVALID, err_mod_invalid
 err_mod_invalid	db 'Invalid MOD file format.', 13, 10, 0
 err_mod_nb_chan	db 'Too many channels in the MOD file.', 13, 10, 0
 err_mod_device	db 'Cannot initialize output device.', 13, 10, 0
-err_sys_v86	db 'Cannot initialize system, CPU already in V86 mode. Please remove any offending'
+err_sys_v86	db 'Cannot initialize system, CPU already in V86 mode. Please remove any offending', 13, 10
 		db 'memory managers (HIMEM.SYS can stay).', 13, 10, 0
 err_dos_02	db 'File not found.', 13, 10, 0
 err_dos_03	db 'Path not found.', 13, 10, 0
