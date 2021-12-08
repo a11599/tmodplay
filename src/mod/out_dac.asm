@@ -561,6 +561,10 @@ set_mixer:
 	push edx
 
 	push eax
+	test cx, cx			; Guard against division by zero hangs
+	setz al
+	xor ah, ah
+	add cx, ax
 	xor edx, edx
 	mov eax, [state(period_base)]
 	and ecx, 0xffff
