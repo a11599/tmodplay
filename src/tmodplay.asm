@@ -116,14 +116,19 @@ segment app
 	call far mod_load		; Load the MOD file
 	jc .mod_error
 
-	call far mod_get_flags
-	log {'Flags: {X}', 13, 10}, eax
-
 	; Start playback
 
 	call far mod_play
+	log {'Playback started, waiting for keypress', 13, 10}
+
+.wait_esc:
 	xor ah, ah
-	int 16h
+	int 0x16
+	log {'Key pressed, scancode: {u8}, ASCII: {u8}', 13, 10}, ah, al
+	cmp ah, 1
+	jne .wait_esc
+
+	log {'Esc pressed, exiting', 13, 10}
 	call far mod_stop
 	call far mod_unload
 	call far mod_shutdown
@@ -872,7 +877,7 @@ err_dos_03	db 'Path not found.', 13, 10, 0
 err_dos_04	db 'Too many open files.', 13, 10, 0
 err_dos_05	db 'Access denied.', 13, 10, 0
 err_dos_06	db 'Invalid handle.', 13, 10, 0
-err_dos_07	db 'Memory control blocks destroyed, possible memory leak.', 13, 10, 0
+err_dos_07	db 'Memory control blocks destroyed, possible memory corruption.', 13, 10, 0
 err_dos_08	db 'Insufficient memory.', 13, 10, 0
 err_dos_09	db 'Invalid memory block address.', 13, 10, 0
 err_dos_0a	db 'Invalid environment.', 13, 10, 0
