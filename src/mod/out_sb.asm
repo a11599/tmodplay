@@ -1078,24 +1078,23 @@ reset_dsp:
 	add dl, 6			; DX: 2x6, DSP reset port
 	mov al, 1
 	out dx, al			; DSP reset start
-
-	%rep 6				; Wait 3 microseconds
-	in al, dx
-	%endrep
-
+	call wait_55ms			; Wait >=55 ms
 	xor al, al
 	out dx, al			; DSP reset stop
 
 	; Wait for reset response code
 
 	add dl, 8			; DX: 2xE, DSP read-buffer status port
-	mov cx, 65535			; DSP data available timeout
+	mov cx, 10			; DSP data available timeout, ~550 ms
 
 .check_reset_done_loop:
 	in al, dx			; Check if reset response is available
 	test al, 0x80
-	loopnz .check_reset_done_loop, cx
+	jnz .check_dsp
+	call wait_55ms
+	loop .check_reset_done_loop, cx
 
+.check_dsp:
 	sub dl, 4			; DX: 2xA, DSP read data port
 	in al, dx			; Get reset response code
 	cmp al, 0xaa
@@ -1114,6 +1113,27 @@ reset_dsp:
 	mov eax, MOD_ERR_DEVICE
 	stc
 	jmp .exit
+
+
+;------------------------------------------------------------------------------
+; Wait (at least) 55 milliseconds.
+;------------------------------------------------------------------------------
+
+wait_55ms:
+	push ax
+	push es
+
+	xor ax, ax
+	mov es, ax
+	mov ax, es:[0x46c]
+
+.wait_tick:
+	cmp ax, es:[0x46c]
+	je .wait_tick
+
+	pop es
+	pop ax
+	retn
 
 
 ;------------------------------------------------------------------------------
