@@ -4,6 +4,8 @@ call :setESC
 
 rem Set output parameters
 
+set "jwlink=c:/Programs/asm/jwlink\JWlink.exe"
+set "nasm=c:/Programs/asm/nasm/nasm.exe"
 set "outdir=dist"
 set "outfile=tmodplay"
 set "outformat=dos"
@@ -70,7 +72,7 @@ for /R "%rootdir%\src" %%F in (*) do (
         rem Compile .asm file
 
         echo !S! -^> !O!
-        c:/Programs/asm/nasm/nasm.exe -i "%rootdir%\src" -f obj "!S!" -o "!O!"
+        "%nasm%" -i "%rootdir%\src" -f obj "!S!" -o "!O!"
         if errorlevel 1 goto error
 
         set "link=no"
@@ -101,7 +103,7 @@ set "binfile=%outdir%\%outfile%"
 copy "%rootdir%\obj\link.tmp" "%rootdir%\obj\link.lst" >nul 2>nul
 if exist "%rootdir%\link.lst" copy "%rootdir%\obj\link.tmp"+"%rootdir%\link.lst" "%rootdir%\obj\link.lst" >nul 2>nul
 del "%rootdir%\obj\link.tmp" >nul 2>nul
-c:/Programs/asm/jwlink\JWlink.exe name "%binfile%" file @"%rootdir%\obj\link.lst" option dosseg option map="obj\%outfile%.map" option packcode=0 option packdata=0 form %outformat%
+"%jwlink%" name "%binfile%" file @"%rootdir%\obj\link.lst" option dosseg option map="obj\%outfile%.map" option packcode=0 option packdata=0 form %outformat%
 if errorlevel 1 goto error
 
 rem Build complete, run optional postbuild task
