@@ -675,7 +675,7 @@ play:
 	shl ebx, 4
 	add ebx, silence_sample
 	xor ecx, ecx
-	mov dh, DMA_READ | DMA_SINGLE
+	mov dh, SYS_DMA_READ | SYS_DMA_SINGLE
 	call far sys_dma_setup_channel
 	call far sys_dma_enable_channel
 	pop bx
@@ -778,7 +778,7 @@ play:
 	mov ebx, [state(buffer_addr)]
 	mov ecx, [state(buffer_size)]
 	lea ecx, [ecx + ecx * 2]
-	mov dh, DMA_READ | DMA_AUTOINIT | DMA_SINGLE
+	mov dh, SYS_DMA_READ | SYS_DMA_AUTO | SYS_DMA_SINGLE
 	call far sys_dma_setup_channel
 	call far sys_dma_enable_channel
 
