@@ -901,12 +901,12 @@ errtab_sys	dd SYS_ERR_V86, err_sys_v86
 
 out_unknown	db 'Initializing playback', 13, 10, 0
 out_speaker	db 'Using internal PC speaker', 13, 10, 0
-out_lpt		db 'Using parallel port DAC on port {X16}', 13, 10, 0
-out_lptst	db 'Using stereo parallel port DAC on port {X16}', 13, 10, 0
-out_lptdual	db 'Using dual parallel port DAC on ports {X16} and {X16}', 13, 10, 0
-out_sb2		db 'Using Sound Blaster 2.0 on port {X16}{>}, IRQ {u8}{>}, DMA {u8}', 13, 10, 0
-out_sbpro	db 'Using Sound Blaster Pro on port {X16}{>}, IRQ {u8}{>}, DMA {u8}', 13, 10, 0
-out_sb16	db 'Using Sound Blaster 16 on port {X16}{>}, IRQ {u8}{>}, DMA {>}{u8}', 13, 10, 0
+out_lpt		db 'Using parallel port DAC on port {X16}h', 13, 10, 0
+out_lptst	db 'Using stereo parallel port DAC on port {X16}h', 13, 10, 0
+out_lptdual	db 'Using dual parallel port DAC on ports {X16}h and {X16}h', 13, 10, 0
+out_sb2		db 'Using Sound Blaster 2.0 on port {X16}h{>}, IRQ {u8}{>}, DMA {u8}', 13, 10, 0
+out_sbpro	db 'Using Sound Blaster Pro on port {X16}h{>}, IRQ {u8}{>}, DMA {u8}', 13, 10, 0
+out_sb16	db 'Using Sound Blaster 16 on port {X16}h{>}, IRQ {u8}{>}, DMA {>}{u8}', 13, 10, 0
 msg_samplerate	db 'Playback sampling rate: {u} Hz', 13, 10, 0
 msg_loading	db 'Loading file: {s}', 13, 10, 0
 
