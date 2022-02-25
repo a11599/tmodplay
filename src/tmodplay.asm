@@ -25,17 +25,55 @@ segment app
 ;------------------------------------------------------------------------------
 
 ..start:
+	mov ax, app_data
+	mov ds, ax			; DS: data segment
+
+	mov ah, 0x40			; Show application header
+	mov bx, 1
+	mov cx, HEADER_SIZE
+	mov dx, header
+	int 21h
+
+	; Check for 386+
+
+	push sp				; Check for 286+
+	pop ax
+	cmp ax,sp
+	jne .cpu_error
+	smsw ax				; Check for 386+
+	cmp ax, 0fff0h
+	jb .init_mem
+
+.cpu_error:
+	mov ah, 0x40			; Show CPU error
+	mov bx, 1
+	mov cx, ERR_CPU_SIZE
+	mov dx, err_cpu
+	int 21h
+	jmp .terminate
+
+.init_mem:
 
 	; Initialize system
 
 	call far sys_mem_setup		; Memory management - first thing to do
-	jc .sys_error
+	jnc .init_env
+	mov esi, errtab_sys		; Display system error message
+	call lookup_message
+	call echo
+	jmp .terminate
+
+.init_env:
 	call far sys_env_setup		; Environment
 	call far sys_file_setup		; File management
-	jc .sys_error
+	jnc .init_log
+	mov esi, errtab_sys		; Display system error message
+	call lookup_message
+	call echo
+	jmp .exit_fail_sys_file
 
-	mov ax, app_data
-	mov ds, ax			; DS: data segment
+.init_log:
+	mov ax, ds
 	mov es, ax			; ES: data segment
 
 	call far sys_file_get_buf_addr	; Save I/O buffer address rel. to DS
@@ -66,9 +104,6 @@ segment app
 	%endif
 
 	; Initialize player
-
-	mov esi, header			; Show application header
-	call echo
 
 	mov esi, arg_help		; Display usage if /? argument present
 	call far sys_env_get_named_arg
@@ -141,23 +176,16 @@ segment app
 	%endif
 
 	call far sys_file_shutdown
+
+.exit_fail_sys_file:
 	call far sys_mem_shutdown
 
+.terminate:
 	mov ax, 0x4c00
 	int 0x21
 
 .usage:
 	mov esi, usage			; Display usage
-	call echo
-	jmp .exit
-
-.sys_error:
-	mov bx, app_data
-	mov ds, bx			; DS: data segment
-	mov esi, header			; Show application header
-	call echo
-	mov esi, errtab_sys		; Display system error messages
-	call lookup_message
 	call echo
 	jmp .exit
 
@@ -769,6 +797,7 @@ segment app_data
 io_buf_addr	dd 0			; Address of the file I/O buffer
 
 header		db 'Therapy MOD player - quarter century later edition', 13, 10, 13, 10, 0
+		HEADER_SIZE equ $ - header - 1
 
 		; Command line usage
 
@@ -832,6 +861,8 @@ arg_help	db '/?', 0
 
 		; Error messages
 
+err_cpu		db 'This program requires a 80386 or newer processor.', 13, 10, 0
+		ERR_CPU_SIZE EQU $ - err_cpu - 1
 err_out_sb	db 'Cannot find Sound Blaster.', 13, 10
 		db 'Make sure the BLASTER environment variable is set correctly.', 13, 10, 0
 err_arg_out	db 'Invalid device "{s}" for option {s}.', 13, 10, 0
