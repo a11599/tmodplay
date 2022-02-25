@@ -315,8 +315,14 @@ setup:
 
 .check_sample_rate_max:
 	cmp edx, 44100			; Limit maximum to 44.1 kHz
-	jbe .check_sb2
+	jbe .check_sb1
 	mov edx, 44100
+
+.check_sb1:
+	cmp al, MOD_SB_1
+	jne .check_sb2
+	mov ah, FMT_8BIT | FMT_MONO | FMT_UNSIGNED
+	jmp .limit_22khz
 
 .check_sb2:
 	cmp al, MOD_SB_2
@@ -330,7 +336,9 @@ setup:
 	mov ah, FMT_8BIT | FMT_STEREO | FMT_UNSIGNED
 	cmp byte [params(stereo_mode)], MOD_PAN_MONO
 	je .save_config
-	cmp edx, 22050			; Limit SB Pro stereo max sample rate
+
+.limit_22khz:
+	cmp edx, 22050			; Limit SB / Pro stereo max sample rate
 	jbe .save_config
 	mov edx, 22050
 	jmp .save_config
@@ -368,7 +376,7 @@ setup:
 	mov al, ah
 
 .log_sb:
-	log {'Output device: Sound Blaster {s} on port {X16}, IRQ {u8}, DMA {u8}', 13, 10}, ecx, [params(port)], [params(irq)], al
+	log {'Output device: Sound Blaster{s} on port {X16}, IRQ {u8}, DMA {u8}', 13, 10}, ecx, [params(port)], [params(irq)], al
 
 	%endif
 
@@ -632,6 +640,24 @@ play:
 	je .start_sb16
 	cmp byte [state(dev_type)], MOD_SB_PRO
 	je .start_sbpro
+	cmp byte [state(dev_type)], MOD_SB_2
+	je .start_sb2
+
+	; Initialize Sound Blaster playback
+
+	call .setup_autoinit_dma	; Setup DMA controller (with autoinit)
+
+	write_dsp 0, 0xd1		; Turn on DAC speaker
+	write_dsp 0x0c, 0x40		; Set time constant
+	write_dsp 0x0c, [state(time_constant)]
+	dec bx
+	write_dsp 0x0c, 0x14		; Set buffer size and start 8-bit
+	write_dsp 0x0c, bl		; single-cycle DMA output
+	write_dsp 0x0c, bh
+
+	jmp .exit
+
+.start_sb2:
 
 	; Initialize Sound Blaster 2.0 playback
 
@@ -1164,8 +1190,24 @@ irq_handler:
 	mov dx, [params(port)]
 	cmp byte [state(dev_type)], MOD_SB_16
 	je .ack_sb16
+	cmp byte [state(dev_type)], MOD_SB_1
+	jne .ack_sb2
 
-	; Acknowledge IRQ on Sound Blaster 2.0 / Pro
+	; Start transfer of next block on Sound Blaster pre-2.0 and acknowledge
+	; IRQ
+
+	mov cx, [params(buffer_size)]
+	dec cx
+	write_dsp 0x0, 0x14		; Set buffer size and restart 8-bit
+	write_dsp 0x0c, cl		; single-cycle DMA output
+	write_dsp 0x0c, ch
+	add dl, 0x0e - 0x0c		; Acknowledge IRQ
+	in al, dx
+	jmp .ack_pic_irq
+
+.ack_sb2:
+
+	; Acknowledge IRQ on Sound Blaster / 2.0 / Pro
 
 	add dl, 0x0e
 	in al, dx
@@ -1282,9 +1324,10 @@ blaster_env	db 'BLASTER', 0
 
 		%ifdef __DEBUG__
 
-type_sb2	db '2.0', 0
-type_sbpro	db 'Pro', 0
-type_sb16	db '16', 0
-types		dw type_sb2, type_sbpro, type_sb16
+type_sb1	db '', 0
+type_sb2	db ' 2.0', 0
+type_sbpro	db ' Pro', 0
+type_sb16	db ' 16', 0
+types		dw type_sb1, type_sb2, type_sbpro, type_sb16
 
 		%endif

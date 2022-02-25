@@ -32,9 +32,10 @@ MOD_DAC_LPT	EQU 1			; Single mono LPT DAC
 MOD_DAC_LPTST	EQU 2			; Stereo LPT DAC on one port
 MOD_DAC_LPTDUAL	EQU 3			; Dual mono LPT DACs on two ports
 
-MOD_SB_2	EQU 0			; Sound Blaster 2.0
-MOD_SB_PRO	EQU 1			; Sound Blaster Pro
-MOD_SB_16	EQU 2			; Sound Blaster 16
+MOD_SB_1	EQU 0			; Sound Blaster (single-cycle DMA only)
+MOD_SB_2	EQU 1			; Sound Blaster 2.0
+MOD_SB_PRO	EQU 2			; Sound Blaster Pro
+MOD_SB_16	EQU 3			; Sound Blaster 16
 
 ; Stereo panning methods
 

@@ -360,6 +360,10 @@ parse_args:
 	mov edi, arg_out_sb2
 	call far sys_str_cmp
 	jnc .check_sb_port
+	mov al, MOD_SB_1		; /o:sb1
+	mov edi, arg_out_sb1
+	call far sys_str_cmp
+	jnc .check_sb_port
 
 	mov ah, MOD_OUT_DAC		; /o:lpt
 	mov al, MOD_DAC_LPT
@@ -808,6 +812,7 @@ usage		db 'Usage: tmodplay <filename.mod> [options]',13, 10, 13, 10
 		db '                    - lpt: One or two parallel port D/A converters', 13, 10
 		db '                    - lptst: Stereo parallel port D/A converter (stereo-on-1)', 13, 10
 		db '                    - sb: Sound Blaster (detect type from BLASTER env. var.)', 13, 10
+		db '                    - sb1: Sound Blaster (pre-2.0)', 13, 10
 		db '                    - sb2: Sound Blaster 2.0', 13, 10
 		db '                    - sbpro: Sound Blaster Pro', 13, 10
 		db '                    - sb16: Sound Blaster 16', 13, 10, 13, 10
@@ -839,6 +844,7 @@ arg_out_sb	db 'sb', 0
 arg_out_sb16	db 'sb16', 0
 arg_out_sbpro	db 'sbpro', 0
 arg_out_sb2	db 'sb2', 0
+arg_out_sb1	db 'sb1', 0
 arg_out_lpt	db 'lpt', 0
 arg_out_lptst	db 'lptst', 0
 arg_out_speaker	db 'speaker', 0
@@ -935,6 +941,7 @@ out_speaker	db 'Using internal PC speaker', 13, 10, 0
 out_lpt		db 'Using parallel port DAC on port {X16}h', 13, 10, 0
 out_lptst	db 'Using stereo parallel port DAC on port {X16}h', 13, 10, 0
 out_lptdual	db 'Using dual parallel port DAC on ports {X16}h and {X16}h', 13, 10, 0
+out_sb1		db 'Using Sound Blaster on port {X16}h{>}, IRQ {u8}{>}, DMA {u8}', 13, 10, 0
 out_sb2		db 'Using Sound Blaster 2.0 on port {X16}h{>}, IRQ {u8}{>}, DMA {u8}', 13, 10, 0
 out_sbpro	db 'Using Sound Blaster Pro on port {X16}h{>}, IRQ {u8}{>}, DMA {u8}', 13, 10, 0
 out_sb16	db 'Using Sound Blaster 16 on port {X16}h{>}, IRQ {u8}{>}, DMA {>}{u8}', 13, 10, 0
@@ -945,6 +952,7 @@ outtab		dd MOD_OUT_DAC * 256 + MOD_DAC_SPEAKER, out_speaker
 		dd MOD_OUT_DAC * 256 + MOD_DAC_LPT, out_lpt
 		dd MOD_OUT_DAC * 256 + MOD_DAC_LPTST, out_lptst
 		dd MOD_OUT_DAC * 256 + MOD_DAC_LPTDUAL, out_lptdual
+		dd MOD_OUT_SB * 256 + MOD_SB_1, out_sb1
 		dd MOD_OUT_SB * 256 + MOD_SB_2, out_sb2
 		dd MOD_OUT_SB * 256 + MOD_SB_PRO, out_sbpro
 		dd MOD_OUT_SB * 256 + MOD_SB_16, out_sb16
