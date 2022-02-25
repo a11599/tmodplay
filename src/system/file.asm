@@ -488,19 +488,22 @@ sys_file_get_size:
 	push ecx
 	push edx
 
-	call far sys_file_get_pos	; Get current position
+	push cs
+	call sys_file_get_pos		; Get current position
 	jc .exit
 	mov edx, eax			; EDX: current position
 
 	mov al, 2			; Move to end of file
 	xor ecx, ecx
-	call far sys_file_set_pos
+	push cs
+	call sys_file_set_pos
 	jc .exit
 
 	mov ecx, edx			; ECX: current position
 	mov edx, eax			; EDX: size of file
 	mov al, 0			; Restore original file position
-	call far sys_file_set_pos
+	push cs
+	call sys_file_set_pos
 	jc .exit
 
 	mov eax, edx			; EAX: size of file
