@@ -2,6 +2,7 @@
 ; MOD player - Sound Blaster output device
 ;------------------------------------------------------------------------------
 ; Supports via software wavetable rendering:
+; - Sound Blaster: 8-bit mono, up to 22050 Hz sample rate
 ; - Sound Blaster 2.0: 8-bit mono, up to 44100 Hz sample rate
 ; - Sound Blaster Pro:
 ;   - 8-bit mono, up to 44100 Hz sample rate
