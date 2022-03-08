@@ -213,16 +213,16 @@ mod_sb_detect:
 	mov bx, 0xff20			; Terminate on space or NUL
 	call far sys_str_parse_int	; Parse value after "T"
 	jc .error
-	mov ch, MOD_SB_PRO
-	cmp al, 2			; 2: Sound Blaster Pro 1.0
-	jb .error			; 0, 1: invalid / not supported (SB 1.0)
-	je .next_param
-	cmp al, 4			; 4: Sound Blaster Pro 2.0
+	mov ch, MOD_SB_1
+	cmp al, 1			; 1: Sound Blaster
+	jb .error			; 0: invalid
 	je .next_param
 	mov ch, MOD_SB_2
-	jb .next_param			; 3: Sound Blaster 2.0
-	cmp al, 6
-	jb .error			; 5: invalid
+	cmp al, 3			; 3: Sound Blaster 2.0
+	je .next_param
+	mov ch, MOD_SB_PRO
+	cmp al, 6			; 2/4/5: Sound Blaster Pro
+	jb .next_param
 	mov ch, MOD_SB_16		; 6+: Sound Blaster 16 or newer
 
 .next_param:
