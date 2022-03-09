@@ -1,0 +1,8 @@
+@echo off
+
+rem Copy this file as test.bat and adjust for quick testing after running
+rem make.bat or makedb.bat.
+
+set file=dist\mod\generatr.mod
+set args=/sr:50000
+dist\tmodplay %file% %args%
