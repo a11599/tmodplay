@@ -8,8 +8,6 @@
 ;   - 8-bit mono, up to 44100 Hz sample rate
 ;   - 8-bit stereo, up to 22050 Hz sample rate
 ; - Sound Blaster 16: 16-bit stereo, up to 44100 Hz sample rate
-; Not supported:
-; - Sound Blaster 1.0: due to the absence of auto-init DMA
 ;------------------------------------------------------------------------------
 ; DOSBox performance with 4-channels and Sound Blaster 16 at 44100 Hz, no
 ; interpolation, no clipping, 20 msec buffer:
