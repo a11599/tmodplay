@@ -15,10 +15,10 @@ dest = dist\tmodplay
 
 # Build targets
 # debug (default): build with debug logging enabled, keeps object files
-# dist: build for release, also cleans up obj directory
+# release: build for release, also cleans up obj directory
 
 debug: debugbuild $(dest).exe
-dist: clean $(dest).exe distclean
+release: clean $(dest).exe distclean
 
 # Enable debug build
 
@@ -40,17 +40,18 @@ distclean: .SYMBOLIC
 # Binary build and link
 
 $(dest).exe: obj $(debugobjs) $(sysobjs) $(modobjs) $(appobjs)
-	%write obj\link.lnk NAME $(dest)
-	%write obj\link.lnk OPTION dosseg
-	%write obj\link.lnk OPTION map=obj\tmodplay.map
-	%write obj\link.lnk OPTION packcode=0
-	%write obj\link.lnk OPTION packdata=0
-	%write obj\link.lnk FORM dos
-	%write obj\link.lnk FILE {$(debugobjs)}
-	%write obj\link.lnk FILE {$(sysobjs)}
-	%write obj\link.lnk FILE {$(modobjs)}
-	%write obj\link.lnk FILE {$(appobjs)}
-	$(wlink) @obj\link.lnk
+	if not exist dist mkdir dist
+	%write obj\tmodplay.lnk NAME $(dest)
+	%write obj\tmodplay.lnk OPTION dosseg
+	%write obj\tmodplay.lnk OPTION map=obj\tmodplay.map
+	%write obj\tmodplay.lnk OPTION packcode=0
+	%write obj\tmodplay.lnk OPTION packdata=0
+	%write obj\tmodplay.lnk FORM dos
+	%write obj\tmodplay.lnk FILE {$(debugobjs)}
+	%write obj\tmodplay.lnk FILE {$(sysobjs)}
+	%write obj\tmodplay.lnk FILE {$(modobjs)}
+	%write obj\tmodplay.lnk FILE {$(appobjs)}
+	$(wlink) @obj\tmodplay.lnk
 
 # Create obj directory for .obj files
 

@@ -3,3 +3,4 @@ obj
 scratch
 makeinit
 test.bat
+emu/env.bat
