@@ -185,8 +185,8 @@ check_a20:
 	xor ax, ax
 	mov es, ax
 
-	; Write inverted value 0x1004f0 to 0x4f0. If A20 is disabled, reading
-	; 0x1004f0 shall return the inverted value. Finally, restore original
+	; Write inverted value of 0x1004f0 to 0x4f0. If A20 is disabled,
+	; reading 0x1004f0 returns the inverted value. Finally, restore original
 	; value in 0x4f0, although this is not strictly necessary since it's the
 	; "Inter-Application Communication Area".
 
