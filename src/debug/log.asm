@@ -89,6 +89,7 @@ log_shutdown:
 	call far sys_file_close		; Close logfile
 
 .exit:
+	mov dword cs:[file_handle], 1	; Log to stdout from now on
 	pop ebx
 	pop eax
 	retf
@@ -100,11 +101,6 @@ log_shutdown:
 
 global log_flags
 log_flags:
-	pushf
-
-	cmp dword cs:[file_handle], 0	; Debug not properly initialized, exit
-	je .noop
-
 	push ax
 	push bx
 	push esi
@@ -114,6 +110,9 @@ log_flags:
 
 	pushf
 	pop ax
+
+	cmp dword cs:[file_handle], 0	; Debug not properly initialized, exit
+	je .done
 
 	mov bx, debug_data
 	mov ds, bx
@@ -152,9 +151,6 @@ log_flags:
 	pop esi
 	pop bx
 	pop ax
-
-.noop:
-	popf
 	retf
 
 
@@ -223,7 +219,7 @@ log_format:
 
 		alignb 4
 flags		dd 0
-file_handle	dd 0
+file_handle	dd 1			; Log to console until initialized
 
 segment debug_data
 

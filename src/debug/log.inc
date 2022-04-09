@@ -165,8 +165,10 @@ extern log_shutdown
 %macro	logf 0
 	%ifdef __DEBUG__
 
+	pushf
 	extern log_flags
 	call far log_flags
+	popf
 
 	%endif
 %endmacro
