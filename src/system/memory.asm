@@ -29,13 +29,15 @@ segment system
 ; -> ES - PSP segment
 ;    SS:SP - Top of application stack
 ; <- CF - Set if error
-;    EAX - Error code if CF is set
+;    EAX - Error code if CF is set or amount of available conventional memory
+;          in bytes if CF is not set
+;    EBX - Size of available extended memory if CF is not set
 ;------------------------------------------------------------------------------
 
 global sys_mem_setup
 sys_mem_setup:
 	push ebx
-	push eax
+	push ecx
 
 	;----------------------------------------------------------------------
 	; Enable flat real mode
@@ -65,13 +67,42 @@ sys_mem_setup:
 
 	; Initialize conventional memory area
 
-	push ecx
-	push dx
-	push es
-
 	mov ebx, cs:[cmb_base]
 	mov ecx, cs:[cmb_size]
 	call init_memory_block_area
+
+	; Allocate extended memory
+
+	call setup_xms
+
+	pop ecx
+	add sp, 4			; Discard EBX from stack
+	mov eax, cs:[cmb_size]
+	mov ebx, cs:[xmb_size]
+	clc
+
+.exit:
+	retf
+
+.error:
+	pop ecx
+	pop ebx
+	stc
+	jmp .exit
+
+
+;------------------------------------------------------------------------------
+; Setup extended memory when XMS manager is present.
+;------------------------------------------------------------------------------
+; <- CF - Set if XMS manager is not present
+;------------------------------------------------------------------------------
+
+setup_xms:
+	push eax
+	push ebx
+	push ecx
+	push edx
+	push es
 
 	;----------------------------------------------------------------------
 	; Allocate largest XMS memory block
@@ -81,7 +112,7 @@ sys_mem_setup:
 	mov ax, 0x4300			; Check presence of XMS
 	int 0x2f
 	cmp al, 0x80
-	jne .done
+	jne .no_xms
 	mov ax, 0x4310			; Get XMS dispatcher address
 	int 0x2f
 	mov word cs:[xms_dispatcher], bx
@@ -134,18 +165,17 @@ sys_mem_setup:
 	call init_memory_block_area
 
 .done:
-	pop es
-	pop dx
-	pop ecx
-	pop eax
 	clc
 
 .exit:
+	pop es
+	pop edx
+	pop ecx
 	pop ebx
-	retf
+	pop eax
+	retn
 
-.error:
-	add sp, 4			; Discard EAX from stack
+.no_xms:
 	stc
 	jmp .exit
 
