@@ -64,6 +64,8 @@ segment app
 	jmp .terminate
 
 .init_env:
+	mov [cmb_size], eax		; Save amount of available conventional
+	mov [xmb_size], ebx		; and extended memory
 	call far sys_env_setup		; Environment
 	call far sys_file_setup		; File management
 	jnc .init_log
@@ -101,6 +103,13 @@ segment app
 	mov esi, edi			; DS:ESI: pointer to logfile name
 	mov eax, LOG_FILE | LOG_AUTOCOMMIT
 	call far log_setup		; Setup logging
+	mov eax, [cmb_size]
+	shr eax, 10
+	adc eax, 0
+	mov ebx, [xmb_size]
+	shr ebx, 10
+	adc ebx, 0
+	log {'Available memory: {u32}k conventional, {u32}k extended', 13, 10}, eax, ebx
 	%endif
 
 	; Initialize player
@@ -799,6 +808,8 @@ segment app_data public class=DATA align=16
 segment app_data
 
 io_buf_addr	dd 0			; Address of the file I/O buffer
+cmb_size	dd 0			; Amount of available conventional mem.
+xmb_size	dd 0			; Amount of available extended mem.
 
 header		db 'Therapy MOD player - quarter century later edition', 13, 10, 13, 10, 0
 		HEADER_SIZE equ $ - header - 1
