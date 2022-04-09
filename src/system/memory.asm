@@ -42,10 +42,9 @@ sys_mem_setup:
 	;----------------------------------------------------------------------
 	; Enable flat real mode
 
-	call setup_flat_real_mode
+	call check_system		; Detect system features
+	call setup_flat_real_mode	; Enable flat real mode
 	jc .error
-
-.setup_memory:
 
 	;----------------------------------------------------------------------
 	; Determine base address and size of available conventional memory
@@ -73,8 +72,16 @@ sys_mem_setup:
 
 	; Allocate extended memory
 
-	call setup_xms
+	mov dword cs:[xmb_base], 0
+	mov dword cs:[xmb_size], 0
+	mov byte cs:[xmem_mode], XMEM_NA
+	mov byte cs:[a20_mode], A20_NA
+	call enable_a20			; Enable A20 gate
+	jc .done			; A20 disabled -> no extended memory
+	call allocate_xmem
 
+.done:
+	call flush_kbd_buf
 	pop ecx
 	add sp, 4			; Discard EBX from stack
 	mov eax, cs:[cmb_size]
@@ -92,45 +99,397 @@ sys_mem_setup:
 
 
 ;------------------------------------------------------------------------------
-; Setup extended memory when XMS manager is present.
+; Shutdown memory management. Should be called before exiting to DOS. Memory
+; management won't be available after this call and all previously allocated
+; memory should be treated as free and should not be written to anymore.
 ;------------------------------------------------------------------------------
-; <- CF - Set if XMS manager is not present
+; <- CF - Cleared
 ;------------------------------------------------------------------------------
 
-setup_xms:
+global sys_mem_shutdown
+sys_mem_shutdown:
+	call free_xmem
+	call disable_a20
+	call shutdown_flat_real_mode
+	call flush_kbd_buf
+
+	clc
+	retf
+
+
+;------------------------------------------------------------------------------
+; Checks system properties and sets feature flags accordingly
+;------------------------------------------------------------------------------
+
+check_system:
+	push eax
+	push ebx
+	push es
+
+	mov word cs:[sys_features], 0
+	smsw ax
+	test al, 0x01
+	jz .check_xms
+	or word cs:[sys_features], FEAT_V86
+
+.check_xms:
+	mov ax, 0x4300			; Check presence of XMS
+	int 0x2f
+	cmp al, 0x80
+	jne .check_vcpi
+	mov ax, 0x4310			; Get XMS dispatcher address
+	int 0x2f
+	mov word cs:[xms_dispatcher], bx
+	mov word cs:[xms_dispatcher + 2], es
+	or word cs:[sys_features], FEAT_XMS
+
+.check_vcpi:
+	xor ax, ax			; Check presence of INT 67h handler
+	mov es, ax
+	cmp dword es:[0x67 *4], 0
+	jz .check_fast_a20
+	mov ax, 0xde00			; Check presence of VCPI
+	int 0x67			; Destroys BX
+	test ah, ah
+	jnz .check_fast_a20
+	or word cs:[sys_features], FEAT_VCPI
+
+.check_fast_a20:
+	mov ax, 0x2403			; Check fast A20 gate control support
+	int 0x15
+	jc .done
+	test ah, ah
+	jnz .done
+	test bl, 0x02
+	jz .done
+	or word cs:[sys_features], FEAT_FAST_A20
+
+.done:
+	pop es
+	pop ebx
+	pop eax
+	retn
+
+
+;------------------------------------------------------------------------------
+; Check if A20 line is enabled. Requires flat real mode to be already enabled.
+;------------------------------------------------------------------------------
+; <- ZF - Set if A20 is disabled, cleared otherwise
+;------------------------------------------------------------------------------
+
+check_a20:
+	push ax
+	push bx
+	push es
+
+	xor ax, ax
+	mov es, ax
+
+	; Write inverted value 0x1004f0 to 0x4f0. If A20 is disabled, reading
+	; 0x1004f0 shall return the inverted value. Finally, restore original
+	; value in 0x4f0, although this is not strictly necessary since it's the
+	; "Inter-Application Communication Area".
+
+	cli
+	a32 mov ax, [es:0x1004f0]
+	mov bx, [es:0x4f0]
+	not ax
+	mov es:[0x4f0], ax
+	a32 cmp [es:0x1004f0], ax	; ZF: set if values match (A20 disabled)
+
+	; Don't change ZF after this point!
+
+	mov [es:0x4f0], bx
+	sti
+
+	pop es
+	pop bx
+	pop ax
+	retn
+
+
+;------------------------------------------------------------------------------
+; Enable A20 line.
+;------------------------------------------------------------------------------
+; <- CF - Set if A20 gate cannot be enabled
+;------------------------------------------------------------------------------
+
+enable_a20:
+
+	; If A20 line is already enabled, nothing to do
+
+	call check_a20
+	jz .enable
+	mov byte cs:[a20_mode], A20_ENABLED
+	clc
+	retn
+
+.enable:
+
+	; A20 line disabled, try to enable
+
+	push ax
+	push cx
+
+	; Try XMS manager
+
+	test word cs:[sys_features], FEAT_XMS
+	jz .fast
+	mov ah, 0x05			; Local enable A20 line
+	call far [cs:xms_dispatcher]
+	test ax, ax
+	jz .error
+	call check_a20
+	jz .error
+	mov byte cs:[a20_mode], A20_XMS
+	jmp .done
+
+.fast:
+
+	; Try I/O port 92h bit 1
+
+	test word cs:[sys_features], FEAT_FAST_A20
+	jz .bios
+	in al, 0x92
+	test al, 0x02			; A20 already enabled in register
+	jnz .bios
+	or al, 0x02			; Set A20 enable bit
+	and al, 0xfe			; Clear reset bit to make sure...
+	out 0x92, al
+	call check_a20
+	jz .bios
+	mov byte cs:[a20_mode], A20_FAST
+	jmp .done
+
+.bios:
+
+	; Try PS/2 BIOS extended services
+
+	mov ax, 0x2401			; Enable A20 via BIOS
+	int 0x15
+	call check_a20
+	jz .kbd
+	mov byte cs:[a20_mode], A20_BIOS
+	jmp .done
+
+.kbd:
+
+	; Try keyboard controller
+
+	cli
+	call wait_kbd_command
+	mov al, 0xad			; Disable keyboard
+	out 0x64, al
+	call flush_kbd_data
+	call wait_kbd_command
+	mov al, 0xd0			; Read from output port
+	out 0x64, al
+	call wait_kbd_data
+	in al, 0x60
+	mov ah, al
+	call wait_kbd_command
+	mov al, 0xd1			; Write to output port
+	out 0x64, al
+	call wait_kbd_command
+	mov al, ah
+	or al, 0x02			; Set A20 control (bit 1)
+	out 0x60, al
+	call wait_kbd_command
+	mov al, 0xae			; Enable keyboard
+	out 0x64, al
+	call wait_kbd_command
+	call flush_kbd_data
+	sti
+
+	call check_a20
+	jz .error
+	mov byte cs:[a20_mode], A20_KBD_CTRLR
+
+.done:
+	clc
+
+.exit:
+	pop cx
+	pop ax
+	retn
+
+.error:
+	mov byte cs:[a20_mode], A20_NA
+	stc
+	jmp .exit
+
+
+;------------------------------------------------------------------------------
+; Wait for the keyboard controller to get ready to accept a command.
+;------------------------------------------------------------------------------
+; Destroys: AL
+;------------------------------------------------------------------------------
+
+wait_kbd_command:
+	in al, 0x64
+	test al, 2
+	jnz wait_kbd_command
+	retn
+
+
+;------------------------------------------------------------------------------
+; Wait for the keyboard controller to get ready to accept a data byte.
+;------------------------------------------------------------------------------
+; Destroys: AL
+;------------------------------------------------------------------------------
+
+wait_kbd_data:
+	in al, 0x64
+	test al, 1
+	jz wait_kbd_data
+	retn
+
+
+;------------------------------------------------------------------------------
+; Wait for the keyboard controller to get ready to accept a data byte.
+;------------------------------------------------------------------------------
+; Destroys: AL
+;------------------------------------------------------------------------------
+
+flush_kbd_data:
+	in al, 0x64
+	test al, 1
+	jz .exit
+	in al, 0x60
+	jmp flush_kbd_data
+
+.exit:
+	retn
+
+
+;------------------------------------------------------------------------------
+; Flush the keystroke buffer. This is necessary to get rid of ghost keystrokes
+; generated by the 8042 "Read from output port" command when enabling the A20
+; line.
+;------------------------------------------------------------------------------
+
+flush_kbd_buf:
+	push ax
+
+.flush:
+	mov ah, 0x01
+	int 0x16
+	jz .exit
+	xor ah, ah
+	int 0x16
+	jmp .flush
+
+.exit:
+	pop ax
+	retn
+
+
+;------------------------------------------------------------------------------
+; Disable A20 line.
+;------------------------------------------------------------------------------
+
+disable_a20:
+	push ax
+
+	mov al, cs:[a20_mode]
+	cmp al, A20_KBD_CTRLR
+	je .kbd
+	cmp al, A20_BIOS
+	je .bios
+	cmp al, A20_FAST
+	je .fast
+	cmp al, A20_XMS
+	jne .exit
+
+	; Use XMS manager
+
+	mov ah, 0x06			; Local disable A20 line
+	call far [cs:xms_dispatcher]
+	jmp .done
+
+.fast:
+
+	; Use I/O port 92h bit 1
+
+	in al, 0x92
+	test al, 0x02			; A20 already disabled in register
+	jz .done
+	and al, 0xfc			; Clear A20 and reset bits
+	out 0x92, al
+	jmp .done
+
+.bios:
+
+	; Use PS/2 BIOS extended services
+
+	mov ax, 0x2400			; Disable A20 via BIOS
+	int 0x15
+	jmp .done
+
+.kbd:
+
+	; Use keyboard controller
+
+	cli
+	call wait_kbd_command
+	mov al, 0xad			; Disable keyboard
+	out 0x64, al
+	call flush_kbd_data
+	call wait_kbd_command
+	mov al, 0xd0			; Read from output port
+	out 0x64, al
+	call wait_kbd_data
+	in al, 0x60
+	mov ah, al
+	call wait_kbd_command
+	mov al, 0xd1			; Write to output port
+	out 0x64, al
+	call wait_kbd_command
+	mov al, ah
+	and al, 0xfd			; Clear A20 control (bit 1)
+	out 0x60, al
+	call wait_kbd_command
+	mov al, 0xae			; Enable keyboard
+	out 0x64, al
+	call wait_kbd_command
+	call flush_kbd_data
+	sti
+
+.done:
+	mov byte cs:[a20_mode], A20_NA
+
+.exit:
+	pop ax
+	retn
+
+
+;------------------------------------------------------------------------------
+; Setup extended memory. A20 line must be enabled and CPU must be in flat real
+; mode!
+;------------------------------------------------------------------------------
+; <- CF - Set if extended memory not available
+;------------------------------------------------------------------------------
+
+allocate_xmem:
 	push eax
 	push ebx
 	push ecx
 	push edx
 	push es
 
+	test word cs:[sys_features], FEAT_XMS
+	jz .allocate_raw
+
 	;----------------------------------------------------------------------
-	; Allocate largest XMS memory block
-
-	; Get XMS dispatcher address
-
-	mov ax, 0x4300			; Check presence of XMS
-	int 0x2f
-	cmp al, 0x80
-	jne .no_xms
-	mov ax, 0x4310			; Get XMS dispatcher address
-	int 0x2f
-	mov word cs:[xms_dispatcher], bx
-	mov word cs:[xms_dispatcher + 2], es
-
-	; Enable the A20 line
-
-	mov ah, 0x05			; Local enable A20 line
-	call far [cs:xms_dispatcher]
-	test ax, ax
-	jz .done
-
-	; Allocate largest XMS block
+	; XMS manager present; allocate largest memory block
 
 	mov ah, 0x08			; Get largest block
+	xor bl, bl
 	call far [cs:xms_dispatcher]
 	cmp bl, 0x80
-	jae .done
+	jae .no_xmem
+	test ax, ax
+	jz .no_xmem
 	mov dx, ax
 	movzx ecx, ax
 	shl ecx, 10
@@ -138,7 +497,7 @@ setup_xms:
 	mov ah, 0x09			; Allocate largest block
 	call far [cs:xms_dispatcher]
 	test ax, ax
-	jz .done
+	jz .no_xmem
 	mov cs:[xmb_handle], dx
 	mov ah, 0x0c			; Get linear memory address
 	call far [cs:xms_dispatcher]
@@ -153,18 +512,49 @@ setup_xms:
 	; XMS memory block already allocated, but failed to get linear address,
 	; reset resources; only conventional memory will be available.
 
-	call shutdown_xms
-	jmp .done
+	mov byte cs:[xmem_mode], XMEM_XMS
+	call free_xmem
+	jmp .no_xmem
 
 .xms_ready:
 
 	; Initialize XMS memory block area
 
+	mov byte cs:[xmem_mode], XMEM_XMS
+	jmp .init_xmb
+
+.allocate_raw:
+
+	;----------------------------------------------------------------------
+	; No memory managers; allocate all extended memory
+
+	mov ah, 0x88			; Get size of extended memory
+	int 0x15
+	test ax, ax
+	jz .no_xmem
+
+	movzx ecx, ax			; ECX: size of extended memory
+	shl ecx, 10
+	mov ebx, 0x100000		; EBX: base of extended memory
+
+	; Hook into INT 15h
+
+	mov byte cs:[xmem_mode], XMEM_RAW
+	xor ax, ax
+	mov es, ax
+	mov eax, es:[0x15 * 4]		; Save old INT 15h handler address
+	mov cs:[int15_prev_handler], eax
+	mov ax, cs
+	shl eax, 16
+	mov ax, int15_handler
+	mov es:[0x15 * 4], eax
+	mov cs:[xmb_base], ebx
+	mov cs:[xmb_size], ecx
+
+.init_xmb:
 	mov ebx, cs:[xmb_base]
 	mov ecx, cs:[xmb_size]
 	call init_memory_block_area
-
-.done:
 	clc
 
 .exit:
@@ -175,56 +565,68 @@ setup_xms:
 	pop eax
 	retn
 
-.no_xms:
+.no_xmem:
 	stc
 	jmp .exit
 
 
 ;------------------------------------------------------------------------------
-; Shutdown memory management. Should be called before exiting to DOS. Memory
-; management won't be available after this call and all previously allocated
-; memory should be treated as free and should not be written to anymore.
-;------------------------------------------------------------------------------
-; <- CF - Cleared
+; Handler for INT 15h function 88h to return no available extended memory
 ;------------------------------------------------------------------------------
 
-global sys_mem_shutdown
-sys_mem_shutdown:
-	call shutdown_xms
-	call shutdown_flat_real_mode
+int15_handler:
+	cmp ah, 0x88			; Intercept get extended memory call
+	je .fn88
+	jmp 0x1234:0x1234
+	int15_prev_handler EQU $ - 4
 
-	clc
-	retf
+.fn88:
+	xor ax, ax			; All extended memory allocated
+	iret
 
 
 ;------------------------------------------------------------------------------
-; Free up extended memory locked by memory management.
+; Free up extended memory. A20 line must be enabled and CPU must be in flat
+; real mode!
 ;------------------------------------------------------------------------------
 
-shutdown_xms:
-	push ax
+free_xmem:
+	push eax
 	push dx
+	push es
 
-	cmp dword cs:[xms_dispatcher], 0
-	je .exit
-	cmp word cs:[xmb_handle], 0
-	je .disable_a20
+	cmp byte cs:[xmem_mode], XMEM_XMS
+	je .xms
+	cmp byte cs:[xmem_mode], XMEM_RAW
+	jne .exit
 
-	mov ah, 0x0d			; Lock XMS block
+	;----------------------------------------------------------------------
+	; No memory managers, free extended memory
+
+	xor ax, ax
+	mov es, ax
+	mov eax, cs:[int15_prev_handler]
+	mov es:[0x15 * 4], eax		; Resotre old INT 15h handler address
+	jmp .exit
+
+.xms:
+
+	;----------------------------------------------------------------------
+	; XMS manager present, free allocated memory block
+
+	mov ah, 0x0d			; Unlock XMS block
 	mov dx, cs:[xmb_handle]
 	call far [cs:xms_dispatcher]
 	mov ah, 0x0a			; Free XMS block
 	call far [cs:xms_dispatcher]
 	mov word cs:[xmb_handle], 0
-
-.disable_a20:
-	mov ah, 0x06			; Local disable A20 line
-	call far [cs:xms_dispatcher]
-	mov dword cs:[xms_dispatcher], 0
+	jmp .exit
 
 .exit:
+	mov byte cs:[xmem_mode], XMEM_NA
+	pop es
 	pop dx
-	pop ax
+	pop eax
 	retn
 
 
@@ -824,8 +1226,7 @@ setup_flat_real_mode:
 
 	; Flat real mode is not (yet ;) possible in a V86 task
 
-	smsw ax
-	test al, 0x01
+	test word cs:[sys_features], FEAT_V86
 	jz .setup_gdt
 	mov eax, SYS_ERR_V86
 	jmp .error
@@ -980,8 +1381,11 @@ set_segment_limit:
 ;==============================================================================
 
 gpe_raised	db 0			; Flag to track GP exceptions
+xmem_mode	db XMEM_NA		; Extended memory mode
+a20_mode	db A20_NA		; A20 gate control mode
 
 		alignb 2
+sys_features	dw 0			; System feature flags (FEAT_)
 xmb_handle	dw 0			; XMS memory block handle
 		alignb 4
 xms_dispatcher	dd 0			; Address of XMS dispatcher

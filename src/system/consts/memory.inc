@@ -8,6 +8,28 @@ MCB_SIGNATURE	EQU 'MB'		; Memory control block signature
 MIN_BLOCK_SIZE	EQU 1024		; Minimum block split size
 DMA_MAX_ADDRESS	EQU 0x01000000		; Maximum DMA memory address (16 MB)
 
+; System features
+
+FEAT_V86	EQU 0x01		; V86 mode
+FEAT_XMS	EQU 0x02		; XMS memory manager present
+FEAT_VCPI	EQU 0x04		; VCPI manager present
+FEAT_FAST_A20	EQU 0x08		; Fast A20 gate control available
+
+; Extended memory modes
+
+XMEM_NA		EQU 0			; Extended memory not available
+XMEM_RAW	EQU 1			; Raw memory management (INT 15h)
+XMEM_XMS	EQU 2			; XMS memory management
+
+; A20 line control modes
+
+A20_NA		EQU 0			; A20 not available
+A20_ENABLED	EQU 1			; A20 already enabled
+A20_XMS		EQU 2			; XMS manager
+A20_FAST	EQU 3			; I/O port 92h
+A20_BIOS	EQU 4			; PS/2 BIOS services
+A20_KBD_CTRLR	EQU 5			; 8042 keyboard controller
+
 ; Memory control block status
 
 MCB_FREE	EQU 0			; Block available
