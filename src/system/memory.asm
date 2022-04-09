@@ -215,20 +215,16 @@ check_a20:
 ;------------------------------------------------------------------------------
 
 enable_a20:
+	push ax
 
 	; If A20 line is already enabled, nothing to do
 
 	call check_a20
 	jz .enable
 	mov byte cs:[a20_mode], A20_ENABLED
-	clc
-	retn
+	jmp .done
 
 .enable:
-
-	; A20 line disabled, try to enable
-
-	push ax
 
 	; Try XMS manager
 
