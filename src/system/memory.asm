@@ -229,7 +229,6 @@ enable_a20:
 	; A20 line disabled, try to enable
 
 	push ax
-	push cx
 
 	; Try XMS manager
 
@@ -309,7 +308,6 @@ enable_a20:
 	clc
 
 .exit:
-	pop cx
 	pop ax
 	retn
 
