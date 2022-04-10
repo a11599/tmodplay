@@ -6,7 +6,6 @@
 ;------------------------------------------------------------------------------
 ; TODO:
 ; - Flat real mode under VCPI
-; - Extended memory allocation & A20 line enable/disable without HIMEM.SYS
 ;==============================================================================
 
 cpu 386
@@ -529,7 +528,7 @@ allocate_xmem:
 
 	movzx ecx, ax			; ECX: size of extended memory
 	shl ecx, 10
-	mov ebx, 0x100000		; EBX: base of extended memory
+	mov edx, 0x100000		; EDX: base of extended memory
 
 	; Hook into INT 15h
 
@@ -542,7 +541,33 @@ allocate_xmem:
 	shl eax, 16
 	mov ax, int15_handler
 	mov es:[0x15 * 4], eax
-	mov cs:[xmb_base], ebx
+
+	; Check for VDISK allocations
+
+	les bx, es:[0x19 * 4]		; ES:BX: INT 19h vector
+	cmp dword es:[bx + 0x12], 'SIDV'
+	jne .check_vdisk_xmem
+	cmp byte es:[bx + 0x16], 'K'
+	jne .check_vdisk_xmem
+	mov edx, es:[bx + 0x2c]		; EDX: base of free extended memory
+	add edx, 0x0f			; Use 24 bits only and align on
+	and edx, 0xfffff0		; paragraph
+
+.check_vdisk_xmem:
+	mov ax, 0xffff			; Check VDISK allocation in extended
+	mov es, ax			; memory if INT 19h absent
+	cmp dword es:[0x13], 'SDIV'
+	jne .set_raw_block
+	cmp byte es:[0x17], 'K'
+	jne .set_raw_block
+	movzx eax, word es:[0x2e]	; EAX: base of free extended memory
+	shl eax, 10			; Convert from KB to bytes
+	cmp edx, eax			; Pick the larger value
+	ja .set_raw_block
+	mov edx, eax
+
+.set_raw_block:
+	mov cs:[xmb_base], edx
 	mov cs:[xmb_size], ecx
 
 .init_xmb:
