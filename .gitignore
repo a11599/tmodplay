@@ -4,3 +4,4 @@ scratch
 makeinit
 test.bat
 emu/env.bat
+emu/dosbox.log

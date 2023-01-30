@@ -10,3 +10,6 @@ extern sys_mem_setup
 extern sys_mem_shutdown
 extern sys_mem_alloc
 extern sys_mem_free
+
+extern sys_get_int_handler
+extern sys_set_int_handler

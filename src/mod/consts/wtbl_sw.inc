@@ -22,6 +22,14 @@ UNROLL_MAX_SPD	EQU 17
 
 UNROLL_SAMPLES	EQU (UNROLL_COUNT + 1) * UNROLL_MAX_SPD
 
+; Linear interpolation exponent. The actual interpolation is 2^LIN_IPOL_EXP.
+; 32x interpolation gives enough headroom up to 46.4 kHz. Keep in mind however,
+; that 1024 times actual interpolation bytes of low memory will be allocated for
+; the interpolation lookup table. For normal Protracker MODs, 8x interpolation
+; should be enough up to 46.4 kHz mixing rate.
+
+LIN_IPOL_EXP	EQU 5			; 32x interpolation for full coverage
+
 ; Render macro operation control constants
 
 RENDER_STORE	EQU 0			; Overwrite buffer with sample (store)
@@ -31,3 +39,5 @@ RENDER_PAN_R	EQU 1			; Primary channel = right
 RENDER_PAN_HARD	EQU 0			; Hard left/right panning (Amiga style)
 RENDER_PAN_X	EQU 1			; Hard panning with 75% crossfade
 RENDER_PAN_REAL	EQU 2			; Real panning using channel pan value
+RENDER_IPOL_NN	EQU 0			; Nearest neighbour interpolation
+RENDER_IPOL_LIN	EQU 1			; Linear interpolation for upsampling

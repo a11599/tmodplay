@@ -7,6 +7,7 @@
 ; Error codes
 
 SYS_ERR_V86	EQU -1			; System in V86 mode
+SYS_ERR_LH	EQU -2			; Program cannot be loaded high
 
 ; Memory allocation modes
 

@@ -16,6 +16,10 @@ cpu 386
 %include "system/api/pic.inc"
 %include "debug/log.inc"
 
+; Shortcut macros for easier access to nested structures
+
+%define	vcpi_pm(var) vcpi_data + vcpi_v86_to_pm. %+ var
+
 segment system public use16 class=CODE align=16
 segment system
 
@@ -39,13 +43,6 @@ sys_mem_setup:
 	push ecx
 
 	;----------------------------------------------------------------------
-	; Enable flat real mode
-
-	call check_system		; Detect system features
-	call setup_flat_real_mode	; Enable flat real mode
-	jc .error
-
-	;----------------------------------------------------------------------
 	; Determine base address and size of available conventional memory
 	; allocated for the program
 
@@ -63,7 +60,14 @@ sys_mem_setup:
 	sub ebx, eax			; EBX: size of available memory
 	mov cs:[cmb_size], ebx
 
-	; Initialize conventional memory area
+	;----------------------------------------------------------------------
+	; Enable flat real mode
+
+	call check_system		; Detect system features
+	call setup_flat_real_mode	; Enable flat real mode
+	jc .error
+
+	; Initialize conventional memory area (needs flat real mode)
 
 	mov ebx, cs:[cmb_base]
 	mov ecx, cs:[cmb_size]
@@ -216,10 +220,15 @@ check_a20:
 enable_a20:
 	push ax
 
-	; If A20 line is already enabled, nothing to do
+	; If A20 line is already enabled, nothing to do. A20 is always enabled
+	; under VCPI, also skip checking in this case.
 
+	test word cs:[sys_features], FEAT_VCPI
+	jnz .enabled
 	call check_a20
 	jz .enable
+
+.enabled:
 	mov byte cs:[a20_mode], A20_ENABLED
 	jmp .done
 
@@ -1240,25 +1249,207 @@ log_mcbs:
 ;------------------------------------------------------------------------------
 
 setup_flat_real_mode:
+	push ds
 	push es
+	push fs
+	push ebx
+	push ecx
+	push edx
+	push esi
+	push edi
 	push eax
 
-	; Flat real mode is not (yet ;) possible in a V86 task
-
-	test word cs:[sys_features], FEAT_V86
-	jz .setup_gdt
-	mov eax, SYS_ERR_V86
-	jmp .error
-
-.setup_gdt:
-
-	; Setup minimal GDT for later
+	; Initialize GDT and IDT
 
 	xor eax, eax
+	mov cs:[idt_segment], ax	; Real mode IDT segment (zeropage)
 	mov ax, cs
 	shl eax, 4
 	add eax, gdt
 	mov cs:[gdt_base], eax
+
+	test word cs:[sys_features], FEAT_V86
+	jnz .v86_error
+	jz .setup_gpe_handler
+	test word cs:[sys_features], FEAT_VCPI
+	jz .v86_error
+
+	;----------------------------------------------------------------------
+	; TODO: Fix VCPI (or drop if can't implement)
+	;----------------------------------------------------------------------
+	; VCPI initialization - requires:
+	; - Program be loaded into conventional memory
+	; - All conventional memory (up to 640K) mapped to same physical address
+
+	; Reserve memory for VCPI-specific data
+	; 0x0000 - Page directory (4096 bytes)
+	; 0x1000 - First page table (4096 bytes)
+	; 0x2000 - Interrupt Descriptor Table (1024 bytes)
+	; 0x2400 - Task State Segment (104 bytes)
+	; 0x2468 - End of VCPI-specific data structures (9320 bytes)
+
+	mov eax, cs:[cmb_base]		; Calculate start of page dir/table
+	shr eax, 4
+	add ax, 0xff			; Align to page
+	xor al, al
+	mov fs, ax			; FS: Page directory (0x0000)
+	mov es, ax			; ES: Page directory (0x0000)
+
+	shl eax, 4
+	add eax, 100000 ;4096 * 2 + 0x68 + 4 * 256
+	mov ebx, eax
+	sub ebx, cs:[cmb_base]
+	sub cs:[cmb_size], ebx
+	js .mem_low_error
+	cmp eax, 0xa0000		; Check if program is loaded high
+	mov cs:[cmb_base], eax
+	jb .init_pagetable
+	mov ax, SYS_ERR_LH
+	jmp .error
+
+.mem_low_error:
+	mov ax, 0x08
+	jmp .error
+
+.init_pagetable:
+	xor eax, eax			; Clear page dir and first page table
+	xor di, di
+	mov cx, (4096 * 2) / 4
+	rep stosd
+
+	mov ax, es
+	add ax, 0x100
+	mov es, ax			; ES: First page table (0x1000)
+	xor di, di			; ES:DI: First page table
+	mov ax, cs			; DS:SI: VCPI server GDT entries
+	mov ds, ax
+	mov si, gdt_vcpi
+	mov ax, 0xde01			; VCPI: Get protected mode interface
+	int 0x67
+	mov cs:[vcpi_api], ebx
+
+.cleanup_pagetable_loop:
+	and byte es:[di + 1], 0xf1	; Clear bits 9-11 in copied page table
+	sub di, 4
+	jnc .cleanup_pagetable_loop
+
+	; Check if memory below 640k maps to physical addresses
+
+	xor di, di
+	mov cx, 160
+	xor ebx, ebx			; EBX: expected physical address
+
+.check_640k_loop:
+	mov eax, es:[di]		; EAX: actual physical address
+	and eax, 0xfffff000
+	cmp eax, ebx
+	jne .v86_error
+	add ebx, 0x1000
+	add di, 4
+	loop .check_640k_loop, cx
+
+	; Setup page directory and get page directory physical address from
+	; first page table
+
+	mov bx, es			; Set page directory entry for first
+	shr bx, 6			; page table
+	mov eax, es:[bx]
+	mov fs:[0], eax
+	mov bx, fs			; Get physical address of page directory
+	shr bx, 6
+	mov eax, es:[bx]
+	and eax, 0xfffff000
+	mov cs:[vcpi_pm(cr3_reg)], eax	; Set CR3 in VCPI mode switch structure
+
+	; Setup Task State Segment after first page table
+
+	mov ax, es
+	add ax, 0x140
+	mov es, ax			; ES: TSS (0x2400)
+	xor di, di
+	mov cx, 0x68 / 4
+	xor eax, eax
+	rep stosd			; Fill with zeroes
+	mov eax, cs:[vcpi_pm(cr3_reg)]
+	mov es:[0x1c], eax		; Set CR3 in TSS
+	mov word es:[0x66], 0x68	; Set I/O map base
+
+	; Setup GDT entries for VCPI protected mode switch code
+
+	xor eax, eax			; Code and data segment selectors
+	mov ax, cs
+	shl eax, 4
+	mov ebx, eax
+	shr ebx, 16
+	mov cs:[gdt_cs + 2], ax
+	mov cs:[gdt_cs + 4], bl
+	mov cs:[gdt_ds + 2], ax
+	mov cs:[gdt_ds + 4], bl
+
+	mov ebx, eax			; IDTR in VCPI mode switch structure
+	add ebx, idt_register
+	mov cs:[vcpi_pm(idtr_addr)], ebx
+	add eax, gdt_register		; GDTR in VCPI mode switch structure
+	mov cs:[vcpi_pm(gdtr_addr)], eax
+
+	xor eax, eax			; Stack segment selector
+	mov ax, ss
+	shl eax, 4
+	mov ebx, eax
+	shr ebx, 16
+	mov cs:[gdt_ss + 2], ax
+	mov cs:[gdt_ss + 4], bl
+
+	xor eax, eax			; TSS selector
+	mov ax, es
+	shl eax, 4
+	mov ebx, eax
+	shr ebx, 16
+	mov cs:[gdt_tss + 2], ax
+	mov cs:[gdt_tss + 4], bl
+
+	; Setup IDT for VCPI protected mode
+
+	; This is a real mode IDT (a relocated interrupt table) used in flat
+	; real mode. Interrupts are disabled during V86 -> PM -> real mode
+	; switch. Default entries reflect the interrupt to their real mode
+	; handlers.
+
+	mov ax, es
+	sub ax, 0x40
+	mov es, ax			; ES: IDT (0x2000)
+	mov cs:[idt_segment], ax	; VCPI IDT segment (0x2000)
+	movzx eax, ax
+	shl eax, 4
+	mov cs:[idt_base], eax
+	xor di, di
+	xor eax, eax
+	mov ax, cs
+	shl eax, 16
+	mov ax, vcpi_int_handlers
+	mov cx, 256
+
+.idt_int_loop:
+	stosd
+	add ax, VCPI_INT_HANDLER_STUB_SIZE
+	loop .idt_int_loop
+
+	; Switch to flat real mode
+
+	xor eax, eax			; Save linear address of VCPI mode
+	mov ax, cs			; switch structure
+	shl eax, 4
+	add eax, vcpi_data
+	mov cs:[vcpi_data_addr], eax
+
+	call vcpi_flat_real_mode	; Go to flat real mode
+	jmp .done
+
+.v86_error:
+	mov eax, SYS_ERR_V86
+	jmp .error
+
+.setup_gpe_handler:
 
 	; Install handler for General Protection Exception to update the
 	; descriptor cache when an attempt is made to read/write beyond 64 KB.
@@ -1274,11 +1465,19 @@ setup_flat_real_mode:
 	mov ax, int13_handler
 	mov es:[0x0d * 4], eax
 
+.done:
 	pop eax
 	clc
 
 .exit:
+	pop edi
+	pop esi
+	pop edx
+	pop ecx
+	pop ebx
+	pop fs
 	pop es
+	pop ds
 	retn
 
 .error:
@@ -1296,6 +1495,14 @@ shutdown_flat_real_mode:
 	push bx
 	push es
 
+	test word cs:[sys_features], FEAT_VCPI
+	jz .uninstall_gpe_handler
+
+	call vcpi_v86_mode		; Switch back to V86 mode
+	jmp .exit
+
+.uninstall_gpe_handler:
+
 	; Remove General Protection Exception handler
 
 	xor ax, ax
@@ -1307,7 +1514,7 @@ shutdown_flat_real_mode:
 
 	cmp byte cs:[gpe_raised], 1
 	jne .exit
-	mov bx, SEG_LIMIT_64K
+	mov bx, SEL_64K
 	call set_segment_limit
 	mov byte cs:[gpe_raised], 0
 
@@ -1337,7 +1544,7 @@ int13_handler:
 	; No, it should be a GP exception, setup descriptor cache
 
 	push bx
-	mov bx, SEG_LIMIT_4G
+	mov bx, SEL_FLAT
 	call set_segment_limit
 	mov byte cs:[gpe_raised], 1
 	pop bx
@@ -1354,7 +1561,7 @@ int13_handler:
 ;------------------------------------------------------------------------------
 ; Set segment limit to 4 GB or 64 KB.
 ;------------------------------------------------------------------------------
-; -> BX - Wanted segment descriptor to set limit (SEG_LIMIT_*)
+; -> BX - Wanted segment descriptor to set limit (SEL_64K or SEL_FLAT)
 ;------------------------------------------------------------------------------
 
 set_segment_limit:
@@ -1369,7 +1576,7 @@ set_segment_limit:
 	mov ax, cs
 	mov ds, ax
 
-	lgdt [gdt_register]
+	lgdt cs:[gdt_register]
 
 	mov eax, cr0
 	or al, 1
@@ -1395,6 +1602,241 @@ set_segment_limit:
 	retn
 
 
+;------------------------------------------------------------------------------
+; Get interrupt vector.
+;------------------------------------------------------------------------------
+; -> CH - Interrupt vector number
+; <- ES:BX - Interrupt vector handler address
+;------------------------------------------------------------------------------
+
+global sys_get_int_handler
+sys_get_int_handler:
+	push ecx
+
+	mov es, cs:[idt_segment]
+	movzx ecx, ch
+	mov bx, es:[ecx * 4]
+	mov es, es:[ecx * 4 + 2]
+
+	pop ecx
+	retf
+
+
+;------------------------------------------------------------------------------
+; Set interrupt vector.
+;------------------------------------------------------------------------------
+; -> CH - Interrupt vector number
+;    ES:BX - Interrupt vector handler address
+;------------------------------------------------------------------------------
+
+global sys_set_int_handler
+sys_set_int_handler:
+	push eax
+	push ecx
+	push es
+
+	movzx ecx, ch
+	mov ax, es
+	shl eax, 16
+	mov ax, bx
+	mov es, cs:[idt_segment]
+	mov es:[ecx * 4], eax
+
+	pop es
+	pop ecx
+	pop eax
+	retf
+
+
+;------------------------------------------------------------------------------
+; Switch to flat real mode under VCPI.
+;------------------------------------------------------------------------------
+; <- ESP - High word cleared
+;------------------------------------------------------------------------------
+
+vcpi_flat_real_mode:
+	pushf
+	push eax			; Save registers modified by VCPI and
+push bx
+push cx
+	push esi			; our code
+	push ds
+	push es
+	push fs
+	push gs
+
+	cli
+
+	mov bx, ss		; Save current stack
+	mov cx, sp
+
+mov ax, 0xb800
+mov es, ax
+mov byte es:[0], '-'
+	mov esi, cs:[vcpi_data_addr]	; Switch to protected mode
+	mov ax, 0xde0c
+	int 0x67
+
+vcpi_pm_entry:
+	mov ax, SEL_FLAT		; Set 4 GB limit for data segments
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+	mov ax, SEL_SS			; Set 64 KB limit for stack segment
+	mov ss, ax
+mov byte es:[dword 0xb8000], 'A'
+
+	mov eax, cr0			; Switch to real mode, disable paging
+	and eax, 0x7ffffffe
+	mov cr0, eax
+	jmp far .restore_stack		; Fixup CS
+
+.restore_stack:
+mov ax, 0xb800
+mov fs, ax
+mov byte fs:[0], 'B'
+	mov ss, bx		; Restore stack
+	movzx esp, cx
+mov byte es:[dword 0xb8000], 'C'
+
+	pop gs				; Restore real mode segment addresses
+	pop fs
+	pop es
+	pop ds
+	pop esi
+pop cx
+pop bx
+	pop eax
+	popf
+
+	retn
+
+
+;------------------------------------------------------------------------------
+; Switch back to V86 mode under VCPI.
+;------------------------------------------------------------------------------
+; <- ESP - High word cleared
+;------------------------------------------------------------------------------
+
+vcpi_v86_mode:
+	pushf
+	push eax
+	push bx
+
+	cli
+
+	movzx esp, sp
+	mov eax, esp
+	mov bx, ss
+
+	o32 push gs			; 0x28
+	o32 push fs			; 0x24
+	o32 push ds			; 0x20
+	o32 push es			; 0x1c
+	o32 push ss			; 0x18
+	push eax			; 0x14: old SP
+	sub sp, 4			; 0x10: reserved (EFLAGS set by VCPI)
+	o32 push cs			; 0x0c: target CS
+;.y: jmp .y
+	push dword .vcpi_v86_entry	; 0x08: target EIP
+mov ax, 0
+mov ds, ax
+mov byte ds:[dword 0xb8002], '-'
+
+	mov eax, cs:[vcpi_pm(cr3_reg)]
+	mov cr3, eax
+	mov eax, cr0			; Switch to protected mode, enable
+	or eax, 0x80000001		; paging
+	mov cr0, eax
+	jmp $ + 2
+mov byte ds:[dword 0xb8002], '0'
+
+	mov ax, SEL_SS
+	mov ss, ax
+	mov ax, SEL_FLAT
+	mov ds, ax			; DS: linear address space
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+
+	push SEL_CS
+	push .setup_pm
+	retf
+
+.setup_pm:
+mov byte ds:[dword 0xb8002], '1'
+;	movzx eax, bx			; Convert SS:ESP to linear address space
+;	shl eax, 4
+;	add esp, eax
+;	mov ax, SEL_FLAT
+;	mov ss, ax
+mov byte ds:[dword 0xb8002], 'A'
+
+	mov ax, 0xde0c			; Switch to V86 mode
+;.x: jmp .x
+	call far dword [cs:vcpi_api]
+
+.vcpi_v86_entry:
+;jmp .vcpi_v86_entry
+push es
+mov ax, 0xb800
+mov es, ax
+mov byte es:[0x02], 'B'
+pop es
+	pop bx
+	pop eax
+	popf
+
+	retn
+
+
+;------------------------------------------------------------------------------
+; VCPI interrupt redirection handlers.
+;------------------------------------------------------------------------------
+
+	alignb 4
+
+	db 'sss', 0
+
+vcpi_int_handlers:
+	%assign i 0
+	%rep 256
+
+	; Interrupt redirection stub for 256 VCPI flat real mode interrupts.
+	; Switches back to V86 mode and executes the original interrupt handler,
+	; then transfers control to a common handler tail.
+	; The size of each stub is 9 bytes (2304 bytes total).
+
+	push es
+	push 0xb800
+	pop es
+	inc byte es:[i * 2]
+	pop es
+
+	call vcpi_v86_mode
+	int i
+
+	jmp word vcpi_int_handler
+
+	%assign i i + 1
+	%endrep
+	VCPI_INT_HANDLER_STUB_SIZE EQU ($ - vcpi_int_handlers) / i
+
+vcpi_int_handler:
+	push ax				; Set return flags value on stack
+	pushf
+	pop ax
+	and ax, 0x8d5
+	and word [esp + 6], ~0x8d5	; ESP high word zeroed by vcpi_v86_mode
+	or word [esp + 6], ax
+	pop ax
+
+	call vcpi_flat_real_mode
+	iret
+
+
+
 ;==============================================================================
 ; Data area
 ;==============================================================================
@@ -1406,16 +1848,37 @@ a20_mode	db A20_NA		; A20 gate control mode
 		alignb 2
 sys_features	dw 0			; System feature flags (FEAT_)
 xmb_handle	dw 0			; XMS memory block handle
+
 		alignb 4
 xms_dispatcher	dd 0			; Address of XMS dispatcher
 cmb_base	dd 0			; Conventional memory area linear addr.
 cmb_size	dd 0			; Size of conventional memory area
 xmb_base	dd 0			; Extended memory area linear address
 xmb_size	dd 0			; Size of extended memory area
+pagedir_addr	dd 0			; Physical address of page directory
+vcpi_data_addr	dd 0			; Linear address of vcpi_data
+vcpi_api	dd 0
+		dw SEL_VCPI
 
-gdt_register	dw GDT_LIMIT
+idt_register	dw 8 * 256 - 1		; IDTR (VCPI only)
+idt_base	dd 0
+gdt_register	dw GDT_LIMIT		; GDTR
 gdt_base	dd 0
+idt_segment	dw 0			; IDT segment
+vcpi_data	istruc vcpi_v86_to_pm
+		at vcpi_v86_to_pm.ldt_selector, dw 0
+		at vcpi_v86_to_pm.tss_selector, dw SEL_TSS
+		at vcpi_v86_to_pm.eip_reg, dd vcpi_pm_entry
+		at vcpi_v86_to_pm.cs_reg, dw SEL_CS
+		iend
+
+		alignb 16
 gdt		dd 0, 0			; Entry 0 is unused
-gdt_data4g	gdt_entry 0, 0xfffff, GDT_FLG_GRANUL | GDT_FLG_BIG | GDT_FLG_PRESENT | GDT_FLG_TYPE_DS | GDT_FLG_WRITE
-gdt_data64k	gdt_entry 0, 0xffff, GDT_FLG_PRESENT | GDT_FLG_TYPE_DS | GDT_FLG_WRITE
+gdt_data4g	gdt_entry 0, 0xfffff, SEG_PRESENT | SEG_DS | SEG_DS_WRITABLE | DESC_PAGE_GRAN | SEG_DS_BIG
+gdt_data64k	gdt_entry 0, 0xffff, SEG_PRESENT | SEG_DS | SEG_DS_WRITABLE
+gdt_vcpi	dd 0, 0, 0, 0, 0, 0	; Entries 3 - 5 reserved for VCPI
+gdt_cs		gdt_entry 0, 0xffff, SEG_PRESENT | SEG_CS | SEG_CS_READABLE
+gdt_ds		gdt_entry 0, 0xfffff, SEG_PRESENT | SEG_DS | SEG_DS_WRITABLE | DESC_PAGE_GRAN | SEG_DS_BIG
+gdt_ss		gdt_entry 0, 0xffff, SEG_PRESENT | SEG_DS | SEG_DS_WRITABLE
+gdt_tss		gdt_entry 0, 0x67, SEG_PRESENT | SEG_TSS
 		GDT_LIMIT EQU $ - gdt - 1

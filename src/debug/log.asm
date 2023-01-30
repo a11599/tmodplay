@@ -173,22 +173,11 @@ log_format:
 	push edi
 	push ds
 
-	xor eax, eax
-	mov ax, ds
-	shl eax, 4			; EAX: DS segment linear address
-	xor ecx, ecx
-	mov cx, debug_data
-	mov bx, cx
-	shl ecx, 4			; ECX: debug_data linear address
+	mov ax, debug_data
+	mov ds, ax
 	movzx esi, si
-	add esi, ecx
-	sub esi, eax			; DS:ESI: source string to format
 	mov edi, buf
-	add edi, ecx
-	sub edi, eax			; DS:EDI: output buffer
 	call far sys_str_format
-	mov ax, cs
-	mov ds, bx
 	mov esi, buf
 	call far sys_str_len		; ECX: length of string
 	mov ah, 0x40

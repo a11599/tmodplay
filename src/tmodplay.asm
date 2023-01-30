@@ -16,6 +16,11 @@ cpu 386
 
 %define	set_file_fn(name, lbl) at mod_file_fns. %+ name, dw %+ (lbl), seg %+ (lbl)
 
+; Flags for explicit playback parameters from command line arguments
+
+ARG_IPOL_SET	EQU 0x01
+ARG_PAN_SET	EQU 0x02
+
 segment app private use16 class=CODE align=16
 segment app
 
@@ -34,15 +39,17 @@ segment app
 	mov dx, header
 	int 21h
 
+	; ---------------------------------------------------------------------
 	; Check for 386+
 
 	push sp				; Check for 286+
 	pop ax
 	cmp ax,sp
 	jne .cpu_error
-	smsw ax				; Check for 386+
-	cmp ax, 0fff0h
-	jb .init_mem
+	sgdt cs:[.gdtr]			; Check for 386+
+	mov al, byte cs:[.gdtr + 5]
+	cmp byte cs:[.gdtr + 5], 0
+	je .init_mem
 
 .cpu_error:
 	mov ah, 0x40			; Show CPU error
@@ -52,8 +59,11 @@ segment app
 	int 21h
 	jmp .terminate
 
+.gdtr	db 6 dup (0)			; Temporary storage for GDTR
+
 .init_mem:
 
+	; ---------------------------------------------------------------------
 	; Initialize system
 
 	call far sys_mem_setup		; Memory management - first thing to do
@@ -85,6 +95,7 @@ segment app
 	sub ebx, eax
 	mov [io_buf_addr], ebx
 
+	; ---------------------------------------------------------------------
 	; Initialize logging
 
 	%ifdef __DEBUG__		; Initialize logging
@@ -112,6 +123,7 @@ segment app
 	log {'Available memory: {u32}k conventional, {u32}k extended', 13, 10}, eax, ebx
 	%endif
 
+	; ---------------------------------------------------------------------
 	; Initialize player
 
 	mov esi, arg_help		; Display usage if /? argument present
@@ -120,6 +132,7 @@ segment app
 	mov ebx, out_params		; Parse arguments
 	call parse_args
 	jc .exit
+	o32 push ds
 	push esi			; Save filename
 
 	mov esi, outtab			; Display output device info
@@ -151,15 +164,56 @@ segment app
 	mov esi, edi
 	call echo
 	mov esi, msg_loading		; Display name of MOD file
-	add bp, 4			; BP: pointer above pushed filename
+	add bp, 8			; BP: pointer above pushed filename
 	call far sys_str_format
 	mov esi, edi
 	call echo
 
 	pop esi				; Restore filename
+	o32 pop ds
 	call far mod_load		; Load the MOD file
 	jc .mod_error
 
+	; ---------------------------------------------------------------------
+	; Determine settings for auto stereo mode and interpolation
+	; EAX: MOD flags
+	; BL: Number of channels
+
+	call far mod_get_channel_count
+	mov bl, al
+	call far mod_get_flags
+
+	; Set sample interpolation mode to linear for multichannel and
+	; non-standard MOD files
+
+	test byte [arg_flags], ARG_IPOL_SET
+	jnz .auto_stereo_mode
+	cmp bl, 4
+	jne .linear_interpolation
+	test eax, MOD_FLG_PAN | MOD_FLG_EXT_OCT
+	jz .auto_stereo_mode
+
+.linear_interpolation:
+	log {'MOD probably composed on PC, choosing linear interpolation', 13, 10}
+	mov al, MOD_IPOL_LINEAR
+	call far mod_set_interpolation
+
+.auto_stereo_mode:
+
+	; Set real stereo mode if pan effects are present
+
+	test byte [arg_flags], ARG_PAN_SET
+	jnz .play
+	test eax, MOD_FLG_PAN
+	jz .play
+
+	log {'MOD uses pan command, choosing real stereo mode', 13, 10}
+	mov al, MOD_PAN_REAL
+	call far mod_set_stereo_mode
+
+.play:
+
+	; ---------------------------------------------------------------------
 	; Start playback
 
 	call far mod_play
@@ -173,6 +227,10 @@ segment app
 	jne .wait_esc
 
 	log {'Esc pressed, exiting', 13, 10}
+
+	; ---------------------------------------------------------------------
+	; Stop playback and terminate
+
 	call far mod_stop
 	call far mod_unload
 	call far mod_shutdown
@@ -317,10 +375,42 @@ parse_args:
 
 	; Set default output device parameters
 
-	mov byte [ebx + mod_out_params.stereo_mode], MOD_PAN_REAL
+	mov byte [ebx + mod_out_params.interpolation], MOD_IPOL_NN
+	mov byte [ebx + mod_out_params.stereo_mode], MOD_PAN_CROSS
 	mov byte [ebx + mod_out_params.initial_pan], 0x60
 	mov word [ebx + mod_out_params.buffer_size], 20
 
+	; ---------------------------------------------------------------------
+	; /ipol:mode - sample interpolation mode
+
+	mov esi, arg_ipol
+	call far sys_env_get_named_arg
+	jc .check_device
+
+	or byte [arg_flags], ARG_IPOL_SET
+	mov edi, arg_ipol_linear	; /ipol:linear
+	mov ecx, -1
+	mov byte [ebx + mod_out_params.interpolation], MOD_IPOL_LINEAR
+	call far sys_str_cmp
+	jnc .check_device
+	mov edi, arg_ipol_nn		; /ipol:nearest
+	mov byte [ebx + mod_out_params.interpolation], MOD_IPOL_NN
+	call far sys_str_cmp
+	jnc .check_device
+
+	mov bp, sp			; Invalid sample interpolation mode
+	o32 push ds
+	push esi
+	o32 push ds
+	push dword arg_ipol
+	mov esi, err_arg_ipol
+	call printf
+	mov sp, bp
+	jmp .error
+
+.check_device:
+
+	; ---------------------------------------------------------------------
 	; /o:device - output device type
 
 	mov esi, arg_out
@@ -389,7 +479,9 @@ parse_args:
 	jnc .check_lpt_port
 
 	mov bp, sp			; Invalid output device
+	o32 push ds
 	push esi
+	o32 push ds
 	push dword arg_out
 	mov esi, err_arg_out
 	call printf
@@ -419,6 +511,7 @@ parse_args:
 .check_port:
 	mov bp, ax			; BP: output device / output device type
 
+	; ---------------------------------------------------------------------
 	; /p:port[,port2] - output device I/O port base address(es)
 
 	mov esi, arg_port
@@ -439,7 +532,9 @@ parse_args:
 
 .port_error:
 	mov bp, sp			; Invalid I/O port
+	o32 push ds
 	push esi
+	o32 push ds
 	push dword arg_port
 	mov esi, err_arg_port
 	call printf
@@ -470,6 +565,7 @@ parse_args:
 
 .check_irq:
 
+	; ---------------------------------------------------------------------
 	; /i:irq - output device IRQ number
 
 	mov esi, arg_irq
@@ -487,7 +583,9 @@ parse_args:
 
 .irq_error:
 	mov bp, sp			; Invalid IRQ number
+	o32 push ds
 	push esi
+	o32 push ds
 	push dword arg_irq
 	mov esi, err_arg_irq
 	call printf
@@ -496,6 +594,7 @@ parse_args:
 
 .check_dma:
 
+	; ---------------------------------------------------------------------
 	; /d:dma[,dma16] - output device DMA channel(s)
 
 	mov esi, arg_dma
@@ -517,7 +616,9 @@ parse_args:
 
 .dma_error:
 	mov bp, sp			; Invalid DMA channel
+	o32 push ds
 	push esi
+	o32 push ds
 	push dword arg_dma
 	mov esi, err_arg_dma
 	call printf
@@ -542,12 +643,14 @@ parse_args:
 
 .check_stereo:
 
-	; /s:mode[,initialpan%]
+	; ---------------------------------------------------------------------
+	; /s:mode[,initialpan%] - stereo rendering mode
 
 	mov esi, arg_stereo
 	call far sys_env_get_named_arg
 	jc .check_samplerate
 
+	or byte [arg_flags], ARG_PAN_SET
 	mov edi, arg_stereo_mono	; /s:mono
 	mov ecx, -1
 	mov byte [ebx + mod_out_params.stereo_mode], MOD_PAN_MONO
@@ -592,7 +695,9 @@ parse_args:
 
 .stereo_error:
 	mov bp, sp			; Invalid stereo mode
+	o32 push ds
 	push esi
+	o32 push ds
 	push dword arg_stereo
 	mov esi, err_arg_stereo
 	call printf
@@ -601,8 +706,11 @@ parse_args:
 
 .realpan_error:
 	mov bp, sp			; Invalid initial pan %
+	o32 push ds
 	push esi
+	o32 push ds
 	push dword arg_stereo
+	o32 push ds
 	push dword arg_stereo_real
 	mov esi, err_arg_realpan
 	call printf
@@ -611,7 +719,8 @@ parse_args:
 
 .check_samplerate:
 
-	; /sr:samplerate
+	; ---------------------------------------------------------------------
+	; /sr:samplerate - Output samplerate
 
 	mov edi, 44100			; EDI: default samplerate
 	mov esi, arg_samplerate
@@ -629,7 +738,9 @@ parse_args:
 
 .samplerate_error:
 	mov bp, sp			; Invalid samplerate
+	o32 push ds
 	push esi
+	o32 push ds
 	push dword arg_samplerate
 	mov esi, err_arg_smprate
 	call printf
@@ -653,7 +764,9 @@ parse_args:
 
 .amp_error:
 	mov bp, sp			; Invalid amplification
+	o32 push ds
 	push esi
+	o32 push ds
 	push dword arg_amp
 	mov esi, err_arg_amp
 	call printf
@@ -662,6 +775,7 @@ parse_args:
 
 .get_filename:
 
+	; ---------------------------------------------------------------------
 	; Get filename
 
 	xor cl, cl
@@ -820,13 +934,14 @@ usage		db 'Usage: tmodplay <filename.mod> [options]',13, 10, 13, 10
 		db 'Options: (case-sensitive)', 13, 10, 13, 10
 		db '/o:device           Select output device. Available options for "device" are:', 13, 10
 		db '                    - speaker: Internal PC speaker', 13, 10
-		db '                    - lpt: One or two parallel port D/A converters', 13, 10
-		db '                    - lptst: Stereo parallel port D/A converter (stereo-on-1)', 13, 10
-		db '                    - sb: Sound Blaster (detect type from BLASTER env. var.)', 13, 10
-		db '                    - sb1: Sound Blaster (pre-2.0)', 13, 10
-		db '                    - sb2: Sound Blaster 2.0', 13, 10
-		db '                    - sbpro: Sound Blaster Pro', 13, 10
-		db '                    - sb16: Sound Blaster 16', 13, 10, 13, 10
+		db '                    - lpt: One or two parallel port D/A converters *', 13, 10
+		db '                    - lptst: Stereo parallel port D/A converter (stereo-on-1) *', 13, 10
+		db '                    - sb: Sound Blaster (detect type from BLASTER env. var.) *', 13, 10
+		db '                    - sb1: Sound Blaster (pre-2.0) *', 13, 10
+		db '                    - sb2: Sound Blaster 2.0 *', 13, 10
+		db '                    - sbpro: Sound Blaster Pro *', 13, 10
+		db '                    - sb16: Sound Blaster 16 *', 13, 10
+		db '                    * These devices use the software wavetable renderer.', 13, 10, 13, 10
 		db '/p:port[,port2]     Output device base port in hexadecimal or as "lptX", where', 13, 10
 		db '                    X is the LPT port number. To enable playback on two', 13, 10
 		db '                    parallel port DACs, specify both printer ports in this', 13, 10
@@ -845,6 +960,10 @@ usage		db 'Usage: tmodplay <filename.mod> [options]',13, 10, 13, 10
 		db '                    "panpct" specifies the initial left/right panning from', 13, 10
 		db '                    center for "real" mode.', 13, 10, 13, 10
 		db '/amp:amplification  Output amplification between 0 - 4. Value is decimal.', 13, 10, 13, 10
+		db '/ipol:mode          Set sample interpolation mode for software wavetable', 13, 10
+		db '                    renderer. Accepted values for "mode":', 13, 10
+		db '                    - nearest: Nearest neighbor (similar to Amiga)', 13, 10
+		db '                    - linear: Linear interpolation (similar to GUS, slow)', 13, 10, 13, 10
 		db '/?                  Display this command line usage information.', 13, 10
 		db 0
 
@@ -874,7 +993,12 @@ arg_stereo_real	db 'real', 0
 arg_stereo_rpan	db 'real,', 0
 arg_samplerate	db '/sr', 0
 arg_amp		db '/amp', 0
+arg_ipol	db '/ipol', 0
+arg_ipol_nn	db 'nearest', 0
+arg_ipol_linear	db 'linear', 0
 arg_help	db '/?', 0
+
+arg_flags	db 0
 
 		; Error messages
 
@@ -897,6 +1021,7 @@ err_arg_smprate	db 'Invalid samplerate "{s}" for option {s}.', 13, 10
 		db 'Make sure the value is not less, than 8000.', 13, 10, 0
 err_arg_amp	db 'Invalid amplification "{s}" for option {s}.', 13, 10
 		db 'Use a value between 0.0 (silence) and 4.0.', 13, 10, 0
+err_arg_ipol	db 'Invalid interpolation mode "{s}" for option {s}.', 13, 10, 0
 err_arg_fname	db 'Please specify the name of the file to play.', 13, 10, 0
 err_args	db 13, 10, 'Type tmodplay /? for help.', 13, 10, 0
 
@@ -920,6 +1045,7 @@ err_mod_nb_chan	db 'Too many channels in the MOD file.', 13, 10, 0
 err_mod_device	db 'Cannot initialize output device.', 13, 10, 0
 err_sys_v86	db 'Cannot initialize system, CPU already in V86 mode. Please remove any offending', 13, 10
 		db 'memory managers (HIMEM.SYS can stay).', 13, 10, 0
+err_sys_lh	db 'This program cannot run in high memory with the current memory manager.', 13, 10, 0
 err_dos_02	db 'File not found.', 13, 10, 0
 err_dos_03	db 'Path not found.', 13, 10, 0
 err_dos_04	db 'Too many open files.', 13, 10, 0
@@ -933,6 +1059,7 @@ err_dos_0f	db 'Invalid drive.', 13, 10, 0
 err_generic	db 'Unable to play the file.', 13, 10, 0
 
 errtab_sys	dd SYS_ERR_V86, err_sys_v86
+		dd SYS_ERR_LH, err_sys_lh
 		dd 0x02, err_dos_02
 		dd 0x03, err_dos_03
 		dd 0x04, err_dos_04

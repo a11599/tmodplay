@@ -106,15 +106,16 @@ play:
 
 	; Setup and install IRQ 0 handler
 
-	xor ax, ax
-	mov es, ax			; ES: zeropage
-	mov eax, es:[0x08 * 4]		; Get and save previous IRQ 0 handler
-	mov cs:[irq0_prev_handler], eax
+	xor cl, cl
+	call far sys_pic_irq_to_int
+	call far sys_get_int_handler
+	mov cs:[irq0_prev_handler + 2], es
+	mov cs:[irq0_prev_handler], bx
 	mov cs:[irq0_player_segment], ds
-	mov bx, cs
-	shl ebx, 16			; EBX: new IRQ 0 handler address
+	mov ax, cs
+	mov es, ax
 	mov bx, lpt_dac_irq0_handler
-	mov es:[0x08 * 4], ebx
+	call far sys_set_int_handler
 
 	; Program the PIT
 
@@ -147,6 +148,8 @@ play:
 
 stop:
 	push eax
+	push bx
+	push cx
 	push es
 
 	cli
@@ -157,10 +160,11 @@ stop:
 
 	; Uninstall IRQ 0 handler
 
-	xor ax, ax
-	mov es, ax			; ES: zeropage
-	mov eax, cs:[irq0_prev_handler]
-	mov es:[0x08 * 4], eax
+	xor cl, cl
+	call far sys_pic_irq_to_int
+	mov es, cs:[irq0_prev_handler + 2]
+	mov bx, cs:[irq0_prev_handler]
+	call far sys_set_int_handler
 
 	; Reset the PIT
 
@@ -169,6 +173,8 @@ stop:
 	sti
 
 	pop es
+	pop cx
+	pop bx
 	pop eax
 	retn
 
@@ -351,6 +357,8 @@ mod_out_none_fns:
 		set_out_fn(upload_sample, upload_sample)
 		set_out_fn(free_sample, clcnoop)
 		set_out_fn(set_amplify, noop)
+		set_out_fn(set_interpol, noop)
+		set_out_fn(set_stereomode, noop)
 		set_out_fn(play, play)
 		set_out_fn(stop, stop)
 		set_out_fn(set_tick_rate, set_tick_rate)

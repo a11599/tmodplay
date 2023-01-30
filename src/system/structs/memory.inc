@@ -20,12 +20,25 @@ struc		mcb
 
 endstruc
 
+struc		vcpi_v86_to_pm
+
+.cr3_reg	resd 1			; Value of CR3 register
+.gdtr_addr	resd 1			; Linear address of GDTR limit and base
+.idtr_addr	resd 1			; Linear address of IDTR limit and base
+.ldt_selector	resw 1			; LDT selector
+.tss_selector	resw 1			; TSS selector
+.eip_reg	resd 1			; EIP for PM entry point
+.cs_reg		resw 1			; CS selector for PM entry point
+.strucsize:
+
+endstruc
+
 ;------------------------------------------------------------------------------
 ; Macro to create a GDT entry.
 ;------------------------------------------------------------------------------
 ; -> %1 - Linear base address (dword)
 ;    %2 - Limit (dword) in bytes or 4 KB
-;    %3 - Flags (word, GDT_FLG_*)
+;    %3 - Flags (word)
 ;------------------------------------------------------------------------------
 
 %macro	gdt_entry 3

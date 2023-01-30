@@ -91,7 +91,7 @@ mod_load_header:
 	loop .loop_title, cx
 	mov byte [mod.title + 20], 0	; Extra zero for ASCIIZ
 
-	log {'Song title: {s}', 13, 10}, mod.title
+	log {'Song title: {s}', 13, 10}, ds, mod.title
 
 	; Number of channels
 	; TODO: Add support for even more formats
@@ -334,7 +334,7 @@ mod_load_header:
 	mov [si + sample(rpt_len)], eax
 
 .next_sample_hdr:
-	log {'Sample: "{s}", size: {u}, ft: {i8}, vol: {X8}, rpt: {u}+{u}', 13, 10}, esi, [si + sample(length)], [si + sample(finetune)], [si + sample(volume)], [si + sample(rpt_start)], [si + sample(rpt_len)]
+	log {'Sample: "{s}", size: {u}, ft: {i8}, vol: {X8}, rpt: {u}+{u}', 13, 10}, ds, esi, [si + sample(length)], [si + sample(finetune)], [si + sample(volume)], [si + sample(rpt_start)], [si + sample(rpt_len)]
 
 	add si, mod_sample.strucsize	; Next sample header
 	add di, 30			; MOD sample header size

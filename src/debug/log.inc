@@ -28,8 +28,7 @@ extern log_shutdown
 ; Log formatted string to stdout.
 ;------------------------------------------------------------------------------
 ; -> %1 - Source string literal for sys_str_format
-;    %2... - Placeholder values. Can't be CS, (E)BP or (E)SP. Memory addresses
-;            cannot use the CS: prefix.
+;    %2... - Placeholder values. Memory addresses cannot use the CS: prefix!
 ;------------------------------------------------------------------------------
 
 %macro	log 1-*
@@ -41,7 +40,13 @@ extern log_shutdown
 
 	[section debug]
 
+%%eax		dd 0
+%%ebp		dd 0
+%%esp		dd 0
+
 %%print:
+	mov cs:[%%ebp], ebp
+	mov cs:[%%esp], esp
 	pushf
 	push si
 	push bp
@@ -53,48 +58,89 @@ extern log_shutdown
 	; 8-bit register
 
 	%ifidni %1, al
+	mov cs:[%%eax], eax
+	movzx eax, al
 	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, ah
-	xchg ah, al
+	mov cs:[%%eax], eax
+	movzx eax, ah
 	push eax
-	xchg ah, al
+	mov eax, cs:[%%eax]
 	%elifidni %1, bl
-	push ebx
+	mov cs:[%%eax], eax
+	movzx eax, bl
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, bh
-	xchg bh, bl
-	push ebx
-	xchg bh, bl
+	mov cs:[%%eax], eax
+	movzx eax, bh
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, cl
-	push ecx
+	mov cs:[%%eax], eax
+	movzx eax, cl
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, ch
-	xchg ch, cl
-	push ecx
-	xchg ch, cl
+	mov cs:[%%eax], eax
+	movzx eax, ch
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, dl
-	push edx
+	mov cs:[%%eax], eax
+	movzx eax, dl
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, dh
-	xchg dh, dl
-	push edx
-	xchg dh, dl
+	mov cs:[%%eax], eax
+	movzx eax, dh
+	push eax
+	mov eax, cs:[%%eax]
 
 	; 16-bit register
 
 	%elifidni %1, ax
+	mov cs:[%%eax], eax
+	movzx eax, ax
 	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, bx
-	push ebx
+	mov cs:[%%eax], eax
+	movzx eax, bx
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, cx
-	push ecx
+	mov cs:[%%eax], eax
+	movzx eax, cx
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, dx
-	push edx
+	mov cs:[%%eax], eax
+	movzx eax, dx
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, si
-	push esi
+	mov cs:[%%eax], eax
+	movzx eax, si
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, di
-	push edi
+	mov cs:[%%eax], eax
+	movzx eax, di
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, bp
-	%error "log: Cannot log value of BP!"
+	mov cs:[%%eax], eax
+	movzx eax, word cs:[%%ebp]
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, sp
-	%error "log: Cannot log value of SP!"
+	mov cs:[%%eax], eax
+	movzx eax, word cs:[%%esp]
+	add eax, 4			; Skip far return address
+	push eax
+	mov eax, cs:[%%eax]
 
 	; 32-bit register
 
@@ -111,14 +157,25 @@ extern log_shutdown
 	%elifidni %1, edi
 	push edi
 	%elifidni %1, ebp
-	%error "log: Cannot log value of EBP!"
+	mov cs:[%%eax], eax
+	mov eax, cs:[%%ebp]
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, esp
-	%error "log: Cannot log value of ESP!"
+	mov cs:[%%eax], eax
+	mov eax, cs:[%%esp]
+	add eax, 4			; Skip far return address
+	push eax
+	mov eax, cs:[%%eax]
 
 	; Segment register
 
 	%elifidni %1, cs
-	%error "log: Cannot log value of CS!"
+	mov cs:[%%eax], eax
+	mov eax, cs:[%%esp]
+	movzx eax, word ss:[eax + 2]
+	push eax
+	mov eax, cs:[%%eax]
 	%elifidni %1, ds
 	o32 push ds
 	%elifidni %1, es

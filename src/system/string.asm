@@ -614,7 +614,7 @@ sys_str_hex:
 ; - {w[8|16|32]:base[.precision]}: Same as above, but signed.
 ; - {c}: A single character.
 ; - {s[:length]}: A string up to "length" characters (default: entire string).
-;   Placeholder value on stack is pointer to string relative to DS.
+;   Placeholder value on stack is pointer to string, first segment, then offset.
 ; - {>}: Skip placeholder value without displaying anything.
 ;------------------------------------------------------------------------------
 ; For each of the placeholders, a value must be provided on the stack in the
@@ -628,7 +628,8 @@ sys_str_hex:
 ;	call far sys_str_format		; Compose formatted string
 ;	mov sp, bp			; Discard placeholder values
 ;------------------------------------------------------------------------------
-; Each placeholder value should take 32 bits on the stack. However for smaller
+; Each placeholder value should take 32 bits on the stack with the exception of
+; the string pointer for {s}, which takes 2 x 32 bits. However for smaller
 ; values, such as {c} or {i16} for example, only the low byte/word of the value
 ; is used and the rest is discarded. So if you want to format AL as a signed
 ; integer, you can safely push eax for {i8}; the upper 24 bits won't be used
@@ -647,6 +648,7 @@ sys_str_format:
 	push esi
 	push edi
 	push bp
+	push es
 
 	cld
 
@@ -665,6 +667,7 @@ sys_str_format:
 .done:
 	mov byte [edi], 0		; Terminate string
 
+	pop es
 	pop bp
 	pop edi
 	pop esi
@@ -931,19 +934,18 @@ sys_str_format:
 	mov ecx, eax
 
 .copy_string:
-	mov ebx, esi			; Save string pointer
-	mov esi, [bp]
+	mov es, [bp]
+	sub bp, 4
+	mov ebx, [bp]
 
 .copy_string_loop:
-	a32 lodsb			; Get next character
+	mov al, es:[ebx]
+	inc ebx
 	test al, al
-	jz .string_end			; End of string
+	jz .skip_variable		; End of string
 	mov [edi], al			; Copy to target string
 	inc edi
 	loop .copy_string_loop, ecx
-
-.string_end:
-	mov esi, ebx			; Restore string pointer
 
 .skip_variable:
 

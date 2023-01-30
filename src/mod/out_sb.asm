@@ -15,6 +15,8 @@
 ; - MOD_PAN_HARD: ~1800 cycles (386dx @ ~10 MHz)
 ; - MOD_PAN_CROSS: ~2650 cycles (386dx @ ~14.5 MHz)
 ; - MOD_PAN_REAL: ~3000 cycles (386dx @ ~16.3 MHz)
+; Same with linear interpolation:
+; - MOD_PAN_REAL: ~5000 cycles (386dx @ ~27.2 MHz)
 ;==============================================================================
 
 cpu 386
@@ -359,13 +361,7 @@ setup:
 	; Show configuration when debug is enabled
 
 	movzx ecx, al
-	movzx eax, word cs:[types + ecx * 2]
-	mov cx, cs
-	shl ecx, 4
-	add ecx, eax
-	mov ax, ds
-	shl eax, 4
-	sub ecx, eax
+	movzx ecx, word cs:[types + ecx * 2]
 	mov al, [params(dma)]
 	cmp byte [state(dev_type)], MOD_SB_16
 	jne .log_sb
@@ -375,7 +371,7 @@ setup:
 	mov al, ah
 
 .log_sb:
-	log {'Output device: Sound Blaster{s} on port {X16}, IRQ {u8}, DMA {u8}', 13, 10}, ecx, [params(port)], [params(irq)], al
+	log {'Output device: Sound Blaster{s} on port {X16}, IRQ {u8}, DMA {u8}', 13, 10}, ds, ecx, [params(port)], [params(irq)], al
 
 	%endif
 
@@ -485,6 +481,8 @@ setup:
 
 	; Setup wavetable
 
+	mov al, [params(interpolation)]
+	mov ah, [params(stereo_mode)]
 	mov bx, [state(amplify)]
 	mov cx, [params(buffer_size)]
 	mov dl, [state(output_format)]
@@ -605,21 +603,20 @@ play:
 	; Setup and install IRQ handler
 
 	mov cs:[irq_player_segment], ds
-	xor ax, ax
-	mov es, ax			; ES: zeropage
 	mov cl, [params(irq)]
 	call far sys_pic_irq_to_int
-	movzx bx, ch
-	shl bx, 2
-	mov eax, es:[bx]
-	mov cs:[irq_prev_handler], eax
+	call far sys_get_int_handler
+	mov cs:[irq_prev_handler + 2], es
+	mov cs:[irq_prev_handler], bx
 	mov ax, cs
-	shl eax, 16
-	mov ax, irq_handler
-	mov es:[bx], eax
+	mov es, ax
+	mov bx, irq_handler
+	call far sys_set_int_handler
 
 	; Enable IRQ
 
+	xor ax, ax
+	mov es, ax			; ES: zeropage
 	movzx cx, byte [params(irq)]
 	call far sys_pic_enable_irq
 
@@ -878,14 +875,11 @@ stop:
 
 	; Uninstall IRQ handler
 
-	xor ax, ax
-	mov es, ax			; ES: zeropage
-	mov eax, cs:[irq_prev_handler]
 	mov cl, [params(irq)]
 	call far sys_pic_irq_to_int
-	movzx bx, ch
-	shl bx, 2
-	mov es:[bx], eax
+	mov es, cs:[irq_prev_handler + 2]
+	mov bx, cs:[irq_prev_handler]
+	call far sys_set_int_handler
 
 	sti
 
@@ -1053,7 +1047,6 @@ render:
 	push bx
 	push ecx
 	push dx
-	mov dl, [params(stereo_mode)]
 	call mod_swt_render
 	pop dx
 	pop ecx
@@ -1310,6 +1303,8 @@ mod_out_sb_fns	istruc mod_out_fns
 		set_out_fn(upload_sample, mod_swt_upload_sample)
 		set_out_fn(free_sample, mod_swt_free_sample)
 		set_out_fn(set_amplify, set_amplify)
+		set_out_fn(set_interpol, mod_swt_set_interpolation)
+		set_out_fn(set_stereomode, mod_swt_set_stereo_mode)
 		set_out_fn(play, play)
 		set_out_fn(stop, stop)
 		set_out_fn(set_tick_rate, set_tick_rate)

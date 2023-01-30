@@ -25,6 +25,8 @@
 ;   - MOD_PAN_HARD: ~3450 cycles (386dx @ ~18.8 MHz)
 ;   - MOD_PAN_CROSS: ~4550 cycles (386dx @ ~24.8 MHz)
 ;   - MOD_PAN_REAL: ~4900 cycles (386dx @ ~26.7 MHz)
+; Same with linear interpolation:
+; - PC speaker, mono LPT DAC: ~4800 cycles (386dx @ ~26.2 MHz)
 ;==============================================================================
 
 cpu 386
@@ -227,6 +229,8 @@ setup:
 
 	; Setup wavetable
 
+	mov al, [params(interpolation)]
+	mov ah, [params(stereo_mode)]
 	mov bx, [state(amplify)]
 	mov cx, 0
 	mov dl, [state(output_format)]
@@ -346,12 +350,13 @@ play:
 
 	; Setup and install IRQ 0 handler
 
-	xor ax, ax
-	mov es, ax			; ES: zeropage
-	mov eax, es:[0x08 * 4]		; Get and save previous IRQ 0 handler
-	mov cs:[irq0_prev_handler], eax
-	mov bx, cs
-	shl ebx, 16			; EBX: new IRQ 0 handler address
+	xor cl, cl
+	call far sys_pic_irq_to_int
+	call far sys_get_int_handler
+	mov cs:[irq0_prev_handler], bx
+	mov cs:[irq0_prev_handler + 2], es
+	mov ax, cs
+	mov es, ax
 	mov dx, [params(port)]		; DX: first port
 	mov di, [params(port + 2)]	; DI: second port
 
@@ -445,7 +450,7 @@ play:
 	mov bx, lpt_dac_irq0_handler
 
 .setup_irq_handler:
-	mov es:[0x08 * 4], ebx
+	call far sys_set_int_handler
 
 	; Program the PIT
 
@@ -482,6 +487,9 @@ play:
 
 stop:
 	push eax
+	push bx
+	push cx
+	push dx
 	push es
 
 	cli
@@ -492,10 +500,11 @@ stop:
 
 	; Uninstall IRQ 0 handler
 
-	xor ax, ax
-	mov es, ax			; ES: zeropage
-	mov eax, cs:[irq0_prev_handler]
-	mov es:[0x08 * 4], eax
+	xor cl, cl
+	call far sys_pic_irq_to_int
+	mov es, cs:[irq0_prev_handler + 2]
+	mov bx, cs:[irq0_prev_handler]
+	call far sys_set_int_handler
 
 	cmp byte [state(dev_type)], MOD_DAC_SPEAKER
 	jne .stop_dac_lptst
@@ -532,6 +541,9 @@ stop:
 	sti
 
 	pop es
+	pop dx
+	pop cx
+	pop bx
 	pop eax
 	retn
 
@@ -693,7 +705,6 @@ render:
 	push bx
 	push ecx
 	push dx
-	mov dl, [params(stereo_mode)]
 	call mod_swt_render_direct
 	pop dx
 	pop ecx
@@ -1195,6 +1206,8 @@ mod_out_dac_fns	istruc mod_out_fns
 		set_out_fn(upload_sample, mod_swt_upload_sample)
 		set_out_fn(free_sample, mod_swt_free_sample)
 		set_out_fn(set_amplify, set_amplify)
+		set_out_fn(set_interpol, mod_swt_set_interpolation)
+		set_out_fn(set_stereomode, mod_swt_set_stereo_mode)
 		set_out_fn(play, play)
 		set_out_fn(stop, stop)
 		set_out_fn(set_tick_rate, set_tick_rate)

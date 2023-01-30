@@ -27,7 +27,9 @@ segment modplayer
 ;------------------------------------------------------------------------------
 ; Setup the wavetable mixer.
 ;------------------------------------------------------------------------------
-; -> BH.BL - Amplification as 8.8 bit fixed point value
+; -> AL - Interpolation mode (MOD_IPOL_*)
+;    AH - Stereo rendering mode (MOD_PAN_*)
+;    BH.BL - Amplification as 8.8 bit fixed point value
 ;    CX - Size of the software wavetable render buffer
 ;    DL - Output device bitstream format (FMT_* flags)
 ;    DH - Initial pan for real stereo mixing
@@ -44,8 +46,13 @@ mod_swt_setup:
 	; ---------------------------------------------------------------------
 	; Initialize wavetable instance
 
+	call mod_swt_set_interpolation
+
 	mov [state(output_format)], dl
 	mov [state(amplify)], bx
+
+	mov al, ah
+	call mod_swt_set_stereo_mode
 
 	push ecx
 
@@ -83,7 +90,20 @@ mod_swt_setup:
 
 	log {'Volume table allocated @{X16}:0000', 13, 10}, ax
 
-.alloc_buffer:
+	; Allocate memory for linear interpolation lookup table - keep in low
+	; memory so we can use direct offset reference to a segment address
+
+	mov ebx, 1024 << LIN_IPOL_EXP	; 512 words for each step
+
+	log {'Allocating {u} bytes software wavetable linear interpolation lookup table', 13, 10}, ebx
+
+	mov al, SYS_MEM_LO
+	call far sys_mem_alloc
+	jc .error
+	shr eax, 4
+	mov [state(ipoltab_seg)], ax
+
+	log {'Software wavetable linear interpolation lookup table allocated @{X16}:0000', 13, 10}, ax
 
 	; Allocate memory for render buffer
 
@@ -105,6 +125,10 @@ mod_swt_setup:
 	; Initialize volume lookup table
 
 	call mod_swt_init_voltab
+
+	; Initialize linear interpolation lookup table
+
+	call mod_swt_init_ipoltab
 
 	; Ready, return number of bytes required after each sample
 
@@ -134,13 +158,24 @@ mod_swt_shutdown:
 
 	movzx eax, word [state(voltab_seg)]
 	test eax, eax
-	jz .free_buffer
+	jz .free_ipoltab
 
 	log {'Disposing software wavetable volume table @{X16}:0000', 13, 10}, ax
 
 	shl eax, 4
 	call far sys_mem_free
 	mov word [state(voltab_seg)], 0
+
+.free_ipoltab:
+	movzx eax, word [state(ipoltab_seg)]
+	test eax, eax
+	jz .free_buffer
+
+	log {'Disposing software wavetable linear interpolation lookup table @{X16}:0000', 13, 10}, ax
+
+	shl eax, 4
+	call far sys_mem_free
+	mov word [state(ipoltab_seg)], 0
 
 .free_buffer:
 	mov eax, [state(buffer_addr)]
@@ -173,6 +208,61 @@ mod_swt_set_amplify:
 	call mod_swt_init_voltab
 
 .exit:
+	retn
+
+
+;------------------------------------------------------------------------------
+; Set sample interpolation.
+;------------------------------------------------------------------------------
+; -> AL - Sample interpolation method (MOD_IPOL_*)
+;    DS - Player instance segment
+;------------------------------------------------------------------------------
+
+global mod_swt_set_interpolation
+mod_swt_set_interpolation:
+	push bx
+	push cx
+
+	mov cx, render_store_fn
+	mov bx, render_mix_fn
+	test al, al
+	jz .set_render_fns
+	mov cx, renlin_store_fn
+	mov bx, renlin_mix_fn
+
+.set_render_fns:
+	mov cs:[render_store_fn_addr], cx
+	mov cs:[render_direct_store_fn_addr], cx
+	mov cs:[render_mix_fn_addr], bx
+	mov cs:[render_direct_mix_fn_addr], bx
+
+	pop cx
+	pop bx
+	retn
+
+
+;------------------------------------------------------------------------------
+; Set stereo rendering mode.
+;------------------------------------------------------------------------------
+; -> AL - Stereo rendering mode
+;    DS - Player instance segment
+;------------------------------------------------------------------------------
+
+global mod_swt_set_stereo_mode
+mod_swt_set_stereo_mode:
+	push eax
+
+	test byte [state(output_format)], FMT_STEREO
+	jnz .set_pantab_base
+	xor al, al
+
+.set_pantab_base:
+	movzx eax, al
+	movzx eax, word cs:[modpantab + eax * 2]
+	mov cs:[render_pantab_base], eax
+	mov cs:[render_direct_pantab_base], eax
+
+	pop eax
 	retn
 
 
@@ -301,6 +391,85 @@ mod_swt_init_voltab:
 .exit:
 	pop es
 	pop ebp
+	pop edi
+	pop esi
+	pop edx
+	pop ecx
+	pop ebx
+	pop eax
+	clc
+	retn
+
+
+;------------------------------------------------------------------------------
+; Initialize the renderer's linear interpolation lookup table.
+;------------------------------------------------------------------------------
+; -> DS - Player instance segment
+;------------------------------------------------------------------------------
+
+mod_swt_init_ipoltab:
+	push eax
+	push ebx
+	push ecx
+	push edx
+	push esi
+	push edi
+	push es
+
+	cld
+
+	mov es, [state(ipoltab_seg)]	; ES: linear interpolation table segment
+	xor edi, edi			; ES:EDI: linear interpolation table
+
+	; Calculate fractional values for sample differences. The table consists
+	; of 2^LIN_IPOL_EXP rows, where each row contains 256 words for
+	; positive (0 -> 255) and 256 words for negative (-255 -> 0) sample
+	; difference values multiplied by the index of the row, divided by the
+	; amount of interpolation (2^LIN_IPOL_EXP). Effectively the fractional
+	; part of sample position and the difference between next and current
+	; sample form an index into the table. The difference goes into bits 0-8
+	; (the difference is between -255 and 255, thus fits into 9 bits) and
+	; the fractional part's most significant bits go into bits
+	; 9-(8 + LIN_IPOL_EXP).
+
+	mov cx, 1 << LIN_IPOL_EXP	; Calculate interpolation steps
+	xor si, si			; Current interpolation step
+
+	log {'Initializing {u16}x linear interpolation lookup table @{X16}:0000', 13, 10}, cx, es
+
+.loop_samples:
+	xor bx, bx			; Current sample difference
+
+	; Calculate fractional values for positive range (0 -> 255).
+
+.loop_samples_pos:
+	mov ax, bx
+	imul si
+	sar ax, LIN_IPOL_EXP
+	adc ax, 0
+	a32 stosw
+	inc bx
+	cmp bx, 255
+	jle .loop_samples_pos
+	mov bx, -255
+
+	; Calculate fractional values for negative range (-255 -> 0).
+
+.loop_samples_neg:
+	mov ax, bx
+	imul si
+	sar ax, LIN_IPOL_EXP
+	adc ax, 0
+	a32 stosw
+	inc bx
+	cmp bx, 0
+	jle .loop_samples_neg
+
+	inc si
+	loop .loop_samples, cx
+
+.exit:
+	pop es
 	pop edi
 	pop esi
 	pop edx
@@ -670,13 +839,29 @@ mod_swt_set_mixer:
 ;    DS:DI - Wavetable channel structure
 ;    ES - Player instance segment
 ;    FS - Volume table segment
+;    GS - Linear interpolation lookup table segment
 ;    %1 - Operation on render buffer (RENDER_STORE / RENDER_ADD)
 ;    %2 - Panning balance (RENDER_PAN_L / RENDER_PAN_R)
 ;    %3 - Panning operation (RENDER_PAN_X / RENDER_PAN_HARD / RENDER_PAN_REAL)
+;    %4 - Interpolation (RENDER_IPOL_NN / RENDER_IPOL_LIN)
+;    %5 - Nearest neighbor channel renderer function when speed >= 1 and
+;         %4 = RENDER_IPOL_LIN
 ; <- Destroys everything except segment registers.
 ;------------------------------------------------------------------------------
 
-%macro	render_channel 3
+%macro	render_channel 5
+
+	mov eax, [di + channel.speed_int]
+
+	%if (%4 = RENDER_IPOL_LIN)
+
+	; Linear upsampling interpolation: use nearest neighbor for downsampling
+
+	test eax,eax
+	jnz %5
+
+	%endif
+
 	push es
 
 	; ---------------------------------------------------------------------
@@ -709,7 +894,6 @@ mod_swt_set_mixer:
 
 	; Setup self-modifying code
 
-	mov eax, [di + channel.speed_int]
 	%assign repcnt 1
 	%rep UNROLL_COUNT		; Playback speed - integer part
 	mov cs:[%%speed_int_ %+ repcnt], eax
@@ -787,7 +971,7 @@ mod_swt_set_mixer:
 	; FS:EBX: volume table lookup index
 	; BL: sample value before amplification
 	; BH: left channel volume
-	; ECX: -
+	; GS:ECX: linear interpolation table lookup index (CX: temp)
 	; FS:EDX: volume table lookup index for real panning / temp
 	; DL: sample value before amplification
 	; DH: right channel volume
@@ -813,6 +997,7 @@ mod_swt_set_mixer:
 	add eax, [si + sample(wt_id)]
 	mov edi, ecx
 	mov esi, eax
+	xor ecx, ecx
 	cld
 
 	; ---------------------------------------------------------------------
@@ -913,7 +1098,31 @@ mod_swt_set_mixer:
 	%rep UNROLL_COUNT
 
 %%render_cnt_ %+ rendercnt:
-	mov bl, [esi]			; Get next 8-bit sample
+
+	%if (%4 = RENDER_IPOL_NN)
+
+	; Nearest neighbour interpolation: use nearest sample
+
+	mov bl, [esi]			; Get current 8-bit sample
+
+	%elif (%4 = RENDER_IPOL_LIN)
+
+	; Linear upsampling interpolation: interpolate between sample points
+
+	mov ax, bp			; Calculate interpolation index
+	shr ax, (7 - LIN_IPOL_EXP)
+	and ax, 0xfe00
+	mov bl, ah			; BL: interpolation index
+	mov ax, [esi]			; Get current and next 8-bit samples
+	movsx cx, ah			; CX: Next 8-bit sample (sign-extend)
+	movsx ax, al			; AX: Current 8-bit sample (sign-extend)
+	sub cx, ax			; CX: Difference between samples (9-bit)
+	and cx, 0x01ff
+	or ch, bl			; ECX: merge interpolation index
+	add ax, gs:[ecx * 2]		; Add interpolated difference
+	mov bl, al			; Use interpolated sample value
+
+	%endif
 
 	%if (%3 = RENDER_PAN_HARD)
 
@@ -1210,32 +1419,54 @@ out_16bit_stereo_unsigned:
 ;------------------------------------------------------------------------------
 
 render_left_store:
-	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
 render_left_mix:
-	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
 render_right_store:
-	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD
+	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
 render_right_mix:
-	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
 render_leftx_store:
-	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_X
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_NN, 0
 render_leftx_mix:
-	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_NN, 0
 render_rightx_store:
-	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_X
+	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_NN, 0
 render_rightx_mix:
-	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_NN, 0
 render_stereo_store:
-	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN, 0
 render_stereo_mix:
-	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN, 0
+
+; Same for linear interpolation
+
+render_left_store_lin:
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_left_store
+render_left_mix_lin:
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_left_mix
+render_right_store_lin:
+	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_right_store
+render_right_mix_lin:
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_right_mix
+render_leftx_store_lin:
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_LIN, render_leftx_store
+render_leftx_mix_lin:
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_LIN, render_leftx_mix
+render_rightx_store_lin:
+	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_LIN, render_rightx_store
+render_rightx_mix_lin:
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_LIN, render_rightx_mix
+render_stereo_store_lin:
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN, render_stereo_store
+render_stereo_mix_lin:
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN, render_stereo_mix
 
 
 ;------------------------------------------------------------------------------
 ; Render audio into the output device buffer.
 ;------------------------------------------------------------------------------
 ; -> CX - Number of samples to render
-;    DL - Stereo rendering mode for stereo bitstreams (MOD_PAN_*)
 ;    DS - Player instance segment
 ;    EDI - Linear address of output device buffer
 ; <- EDI - Linear address of output device buffer after last rendered sample
@@ -1251,9 +1482,11 @@ mod_swt_render:
 
 	push es
 	push fs
+	push gs
 	mov ax, ds
 	mov es, ax
 	mov fs, [state(voltab_seg)]
+	mov gs, [state(ipoltab_seg)]
 
 	; ---------------------------------------------------------------------
 	; Render samples to wavetable render buffer
@@ -1266,13 +1499,8 @@ mod_swt_render:
 	mov di, state(channels)
 	mov ebx, [state(buffer_addr)]
 	sub ebx, [mod.instance_addr]
-	test byte [state(output_format)], FMT_STEREO
-	jnz .set_pantab_base
-	xor dl, dl
-
-.set_pantab_base:
-	movzx edx, dl
-	movzx edx, word cs:[modpantab + edx * 2]
+	mov edx, 0x12345678
+	render_pantab_base EQU $ - 4
 
 	; Render first channel (store rendered samples)
 
@@ -1285,6 +1513,7 @@ mod_swt_render:
 
 	movzx si, byte cs:[edx + esi]
 	call [cs:render_store_fn + si]
+	render_store_fn_addr EQU $ - 2
 
 	pop di
 	pop esi
@@ -1311,6 +1540,7 @@ mod_swt_render:
 
 	movzx si, byte cs:[edx + esi]
 	call [cs:render_mix_fn + si]
+	render_mix_fn_addr EQU $ - 2
 
 	pop di
 	pop esi
@@ -1334,6 +1564,7 @@ mod_swt_render:
 	movzx ebx, byte [state(output_format)]
 	call [cs:out_convert_fn + ebx * 2]
 
+	pop gs
 	pop fs
 	pop es
 
@@ -1346,7 +1577,6 @@ mod_swt_render:
 ; internal rendering format.
 ;------------------------------------------------------------------------------
 ; -> CX - Number of samples to render
-;    DL - Stereo rendering mode for stereo bitstreams (MOD_PAN_*)
 ;    DS - Player instance segment
 ;    EDI - Linear address of output device buffer
 ; <- Destroys everything except segment registers and EDI.
@@ -1361,11 +1591,13 @@ mod_swt_render_direct:
 
 	push es
 	push fs
+	push gs
 	push edi
 
 	mov ax, ds
 	mov es, ax
 	mov fs, [state(voltab_seg)]
+	mov gs, [state(ipoltab_seg)]
 
 	; ---------------------------------------------------------------------
 	; Render samples to output device buffer
@@ -1375,13 +1607,8 @@ mod_swt_render_direct:
 	movzx eax, byte [mod.num_channels]
 	xor esi, esi
 	mov di, state(channels)
-	test byte [state(output_format)], FMT_STEREO
-	jnz .set_pantab_base
-	xor dl, dl
-
-.set_pantab_base:
-	movzx edx, dl
-	movzx edx, word cs:[modpantab + edx * 2]
+	mov edx, 0x12345678
+	render_direct_pantab_base EQU $ - 4
 
 	; Render first channel (store rendered samples)
 
@@ -1394,6 +1621,7 @@ mod_swt_render_direct:
 
 	movzx si, byte cs:[edx + esi]
 	call [cs:render_store_fn + si]
+	render_direct_store_fn_addr EQU $ - 2
 
 	pop di
 	pop esi
@@ -1420,6 +1648,7 @@ mod_swt_render_direct:
 
 	movzx si, byte cs:[edx + esi]
 	call [cs:render_mix_fn + si]
+	render_direct_mix_fn_addr EQU $ - 2
 
 	pop di
 	pop esi
@@ -1434,6 +1663,7 @@ mod_swt_render_direct:
 
 .exit_render:
 	pop edi
+	pop gs
 	pop fs
 	pop es
 
@@ -1473,6 +1703,20 @@ render_mix_fn	dw render_left_mix
 		dw render_leftx_mix
 		dw render_rightx_mix
 		dw render_stereo_mix
+
+		; Same for linear interpolation
+
+renlin_store_fn	dw render_left_store_lin
+		dw render_right_store_lin
+		dw render_leftx_store_lin
+		dw render_rightx_store_lin
+		dw render_stereo_store_lin
+
+renlin_mix_fn	dw render_left_mix_lin
+		dw render_right_mix_lin
+		dw render_leftx_mix_lin
+		dw render_rightx_mix_lin
+		dw render_stereo_mix_lin
 
 		; Lookup table for render function indexes for various stereo
 		; output modes. Must be aligned with MOD_PAN_* constants!

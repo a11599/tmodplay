@@ -16,6 +16,8 @@ struc	mod_out_fns
 .upload_sample	resw 1			; Initialize sample for wavetable mixer
 .free_sample	resw 1			; Dispose sample from wavetable mixer
 .set_amplify	resw 1			; Apply the amplification value
+.set_interpol	resw 1			; Set sample interpolation mode
+.set_stereomode	resw 1			; Set stereo rendering mode
 .play		resw 1			; Start playback
 .stop		resw 1			; Stop playback
 .set_tick_rate	resw 1			; Set playroutine tick rate

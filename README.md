@@ -1,6 +1,6 @@
 # Therapy MOD player (tmodplay)
 
-This the modern remake of a multichannel [MOD](https://en.wikipedia.org/wiki/MOD_(file_format)) player I wrote back in the mid-90's for retro PC platforms. Why? Because programming for limited hardware with direct control over it is a challenging, but rewarding fun.
+This the modern remake of a multichannel [MOD](https://en.wikipedia.org/wiki/MOD_(file_format)) player I wrote back in the mid-90's for retro PC platforms. Why? Because programming for limited hardware with direct control over it is a challenging, but rewarding fun. Also this old modplayer of mine was lost back in the day in a sad hard drive accident and burned a hole in my heart. So it was about time to rebuild it and make it even better than it ever was to heal my wounds finally.
 
 It requires a 386 or above running MS-DOS or Windows 9x/ME in real DOS mode - or an emulator such as DOSBox. It is written in full assembly and includes a small runtime library that implements [flat real mode](https://en.wikipedia.org/wiki/Unreal_mode). The MOD player supports ProTracker format and its close derivates up to 32 channels on the following sound cards:
 
@@ -9,7 +9,9 @@ It requires a 386 or above running MS-DOS or Windows 9x/ME in real DOS mode - or
 * LPT DAC variants (single, dual, stereo) up to 100 kHz sample rate
 * Sound Blaster, Pro and 16 up to 22/44.1 kHz sample rate (depending on actual model)
 
-A minimal, highly optimized software wavetable with 16-bit mixing is included for non-wavetable sound cards (all of them for now, but at least GUS support is planned in the future). Stereo is supported with hard pan or 75% crossfeed. True stereo panning via 8xx and E8x MOD commands is also available.
+An extremely optimized software wavetable with 16-bit mixing and optional linear interpolation upsampling is included for non-wavetable sound cards (all of them for now, but at least GUS support is planned in the future). Stereo is supported with hard pan or 75% crossfeed. True stereo panning via 8xx and E8x MOD commands is also available.
+
+If one can believe DOSBox, this thing should be able to play dope.mod at 32 kHz in stereo through a Sound Blaster 16 with linear interpolation on a 486 DX2/66.
 
 The main development platform is a modern PC with DOSBox, but the result is always tested (also some parts are developed) on actual retro hardware:
 
@@ -18,13 +20,13 @@ The main development platform is a modern PC with DOSBox, but the result is alwa
 
 ## Build pre-requisites
 
-The app can be built in DOS or Windows. The build uses the following toolchain:
+The app can be built under DOS and Windows. The build uses the following toolchain:
 
 * [NASM](https://www.nasm.us/) to compile assembly source code to linkable objects.
 * [Open Watcom](http://www.openwatcom.org/) to make the project and link the executable binary.
 * (optional) [DOSBox-X](https://dosbox-x.com/) to test the build on a modern PC. Normal [DOSBox](https://www.dosbox.com/) should work as well, but the configuration file may need some adjustments.
 
-The build toolchain is also available for Linux, but I only build in DOS and Windows.
+The build toolchain is also available for Linux, but I only build under DOS and Windows.
 
 Download and install the dependencies, then:
 
@@ -58,6 +60,6 @@ This project originally targeted the 286 which was very challenging. However it 
 * There are large MODs (especially multichannel) out there and the 640 KB limit of conventional memory quickly became a bottleneck.
 * There are also a few MODs with samples larger, than 64 KB and supporting this with segment:offset arithmetic (especially for loops) was annoying and slow.
 
-I wanted this to have better sound quality and more compatibility than contemporary players with similar CPU usage and my goals just didn't seem to work out with the 286. And if the 286 is not good enough, why bottleneck 386 and later with 16-bit?
+I wanted this to have better sound quality and more compatibility than contemporary players with similar CPU usage and my goals just didn't seem to work out with the 286. And if the 286 is not good enough, why bottleneck 386 and later with 16-bit instructions?
 
-Why flat real mode? Simply because it's faster, and it was easier to start with than protected mode. The lack of Windows DOS box compatibility is completely irrelevant for me - and this project is for my own satisfaction. :)
+Why flat real mode? Simply because it's faster, and it was easier to start with than protected mode. The lack of Windows DOS box compatibility is completely irrelevant for me - and this project is for my own satisfaction anyways. :)

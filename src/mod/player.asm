@@ -195,7 +195,7 @@ mod_load:
 
 	; Open MOD file
 
-	log {'Opening file "{s}"', 13, 10}, esi
+	log {'Opening file "{s}"', 13, 10}, ds, esi
 
 	mov al, 0			; Open for read
 	call far [es:file_fn(open)]
@@ -238,7 +238,7 @@ mod_load:
 	jc .error_close
 	mov [si + sample(addr)], eax
 
-	log {'Allocated {u} bytes @{X} for sample "{s}"', 13, 10}, ebx, eax, esi
+	log {'Allocated {u} bytes @{X} for sample "{s}"', 13, 10}, ebx, eax, ds, esi
 
 	; Read from file into allocated memory
 
@@ -463,6 +463,19 @@ mod_get_flags:
 
 
 ;------------------------------------------------------------------------------
+; Return the number of channels in the loaded MOD file.
+;------------------------------------------------------------------------------
+; -> ES - Player instance segment
+; <- AL - Number of channels
+;------------------------------------------------------------------------------
+
+global mod_get_channel_count
+mod_get_channel_count:
+	mov al, es:[mod.num_channels]
+	retf
+
+
+;------------------------------------------------------------------------------
 ; Set the amplification level.
 ;------------------------------------------------------------------------------
 ; -> AH.AL - Amplification in 8.8 fixed point value *
@@ -479,6 +492,48 @@ mod_set_amplify:
 	push es
 	pop ds
 	call [out_fn(set_amplify)]
+
+	pop ds
+	pop ax
+	retf
+
+
+;------------------------------------------------------------------------------
+; Set sample interpolation.
+;------------------------------------------------------------------------------
+; -> AL - Sample interpolation method (MOD_IPOL_*)
+;    ES - Player instance segment
+;------------------------------------------------------------------------------
+
+global mod_set_interpolation
+mod_set_interpolation:
+	push ax
+	push ds
+
+	push es
+	pop ds
+	call [out_fn(set_interpol)]
+
+	pop ds
+	pop ax
+	retf
+
+
+;------------------------------------------------------------------------------
+; Set stereo rendering mode.
+;------------------------------------------------------------------------------
+; -> AL - Stereo rendering mode (MOD_PAN_*)
+;    ES - Player instance segment
+;------------------------------------------------------------------------------
+
+global mod_set_stereo_mode
+mod_set_stereo_mode:
+	push ax
+	push ds
+
+	push es
+	pop ds
+	call [out_fn(set_stereomode)]
 
 	pop ds
 	pop ax

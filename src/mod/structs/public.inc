@@ -36,6 +36,7 @@ struc		mod_out_params
 .dma		resb 2			; DMA channels
 .stereo_mode	resb 1			; Stereo mixing mode
 .initial_pan	resb 1			; Initial panning for real stereo mode
+.interpolation	resb 1			; Sample interpolation
 		alignb 4
 .strucsize:
 

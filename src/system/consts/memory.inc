@@ -46,29 +46,46 @@ MEM_ALLOC_DMA	EQU 2			; Allocate memory for DMA
 MEM_SPLIT_NOR	EQU 0			; Don't split if new block too small
 MEM_SPLIT_FORCE	EQU 1			; Force split regardless new block size
 
-; Segment limit constants
+; Selector constants
 
-SEG_LIMIT_64K	EQU 16			; 16-bit segment limit (64 KB)
-SEG_LIMIT_4G	EQU 8			; 32-bit segment limit (4 GB)
+SEL_FLAT	EQU 1 << 3		; 32-bit 0-base data segment selector
+SEL_64K		EQU 2 << 3		; 16-bit 0-base data segment selector
+SEL_VCPI	EQU 3 << 3		; VCPI code segment selector
+SEL_CS		EQU 6 << 3		; 16-bit code segment selector
+SEL_DS		EQU 7 << 3		; 32-bit data segment selector
+SEL_SS		EQU 8 << 3		; 16-bit stack segment selector
+SEL_TSS		EQU 9 << 3		; TSS selector
 
-; GDT flag constants
+; Descriptor flags (generic for each type)
 
-GDT_FLG_GRANUL	EQU 0x8000		; Granularity: 4 KB
-GDT_FLG_BIG	EQU 0x4000		; Big (data segments)
-GDT_FLG_DEFAULT	EQU 0x4000		; Default (code segments)
-GDT_FLG_AVL_1	EQU 0x1000		; Available = 1
-GDT_FLG_AVL_0	EQU 0x0000		; Available = 0
-GDT_FLG_PRESENT	EQU 0x0080		; Segment present
-GDT_FLG_DPL_0	EQU 0x0000		; Destination privilege level 0
-GDT_FLG_DPL_1	EQU 0x0020		; Destination privilege level 1
-GDT_FLG_DPL_2	EQU 0x0040		; Destination privilege level 2
-GDT_FLG_DPL_3	EQU 0x0060		; Destination privilege level 3
-GDT_FLG_TYPE_DS	EQU 0x0010		; Data segment descriptor
-GDT_FLG_TYPE_CS	EQU 0x0010		; Code segment descriptor
-GDT_FLG_TYPE_S	EQU 0x0000		; System segment descriptor
-GDT_FLG_EXP_DWN	EQU 0x0008		; Expand down
-GDT_FLG_CONFRMG	EQU 0x0004		; Conforming
-GDT_FLG_WRITE	EQU 0x0002		; Writeable (data segments)
-GDT_FLG_READ	EQU 0x0002		; Readable (code segments)
-GDT_FLG_ACCESSD	EQU 0x0001		; Accessed
+DESC_PAGE_GRAN	EQU 0x8000		; Granularity: 4 KB (page)
+DESC_AVAILABLE	EQU 0x1000		; Available = 1
+DESC_DPL_MASK	EQU 0x0060		; Destination privilege level bitmask
+DESC_DPL_0	EQU 0x0000		; Destination privilege level 0
+DESC_DPL_1	EQU 0x0020		; Destination privilege level 1
+DESC_DPL_2	EQU 0x0040		; Destination privilege level 2
+DESC_DPL_3	EQU 0x0060		; Destination privilege level 3
 
+; Segment descriptors
+
+SEG_PRESENT	EQU 0x0080		; Code/data segment: segment present
+SEG_CS		EQU 0x0018		; Code segment
+SEG_CS_32BIT	EQU 0x4000		; Code segment: 32 bit
+SEG_CS_CONFRMNG	EQU 0x0004		; Code segment: conforming (caller CPL)
+SEG_CS_READABLE	EQU 0x0002		; Code segment: readable
+SEG_CS_ACCESSED	EQU 0x0001		; Code segment: accessed
+SEG_DS		EQU 0x0010		; Data segment
+SEG_DS_BIG	EQU 0x4000		; Data segment: big (use ESP for stack)
+SEG_DS_EXP_DOWN	EQU 0x0004		; Data segment: expand down
+SEG_DS_WRITABLE	EQU 0x0002		; Data segment: writable
+SEG_DS_ACCESSED	EQU 0x0001		; Data segment: accessed
+SEG_TSS		EQU 0x0009		; Task state segment
+SEG_TSS_BUSY	EQU 0x0002		; Task state segment: busy (active)
+
+; Gate descriptors
+
+GATE_PRESENT	EQU 0x0080		; Gate: present
+GATE_CALL	EQU 0x000c		; Call gate
+GATE_TASK	EQU 0x0005		; Task gate
+GATE_INTERRUPT	EQU 0x000e		; Interrupt gate (CLI on enter)
+GATE_TRAP	EQU 0x000f		; Trap gate

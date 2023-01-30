@@ -43,3 +43,8 @@ MOD_PAN_MONO	EQU 0			; Force mono rendering on stereo device
 MOD_PAN_HARD	EQU 1			; Hard panning left/right (Amiga-style)
 MOD_PAN_CROSS	EQU 2			; Crossfade 20%, ignore panning commands
 MOD_PAN_REAL	EQU 3			; Real panning (use effects 8xx and E8x)
+
+; Sample interpolation methods
+
+MOD_IPOL_NN	EQU 0			; Nearest neighbour interpolation
+MOD_IPOL_LINEAR	EQU 1			; Linear interpolation

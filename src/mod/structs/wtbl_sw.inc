@@ -37,6 +37,7 @@ endstruc
 struc		mod_wtbl_sw
 
 .voltab_seg	resw 1			; Segment address of volume table
+.ipoltab_seg	resw 1			; Segment address of interpolation table
 .channel_ofs	resw MOD_MAX_CHANS	; Channel descriptor offset index table
 .amplify	resw 1			; Amplification
 .output_format	resb 1			; Output device bitstream format
