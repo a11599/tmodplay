@@ -222,7 +222,7 @@ mod_load:
 	test dl, dl
 	jz .done
 
-	log {'Loading samples', 13, 10}
+	log {'Wavetable requires {u} bytes of extra memory after each sample', 13, 10, 'Loading samples', 13, 10}, ebp
 
 .loop_sample:
 	mov ebx, [si + sample(length)]

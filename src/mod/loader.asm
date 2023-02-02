@@ -202,7 +202,7 @@ mod_load_header:
 	mov cx, 128
 	xor ah, ah
 
-	log {'Copy pattern sequence @{X16}:{X16} to {X16}:{X16}', 13, 10}, es, di, ds, si
+	log {'Copying pattern sequence @{X16}:{X16} to {X16}:{X16}', 13, 10}, es, di, ds, si
 
 .loop_seq_pos:
 	mov al, es:[di + bx]
@@ -233,7 +233,7 @@ mod_load_header:
 	test cx, cx
 	jz .dealloc_header
 
-	log {'Copy {u16} sample headers @{X16}:{X16} to {X16}:{X16}, ptr[] @{X16}:{X16}', 13, 10}, cx, es, di, ds, si, ds, bx
+	log {'Copying {u16} sample headers @{X16}:{X16} to {X16}:{X16}, ptr[] @{X16}:{X16}', 13, 10}, cx, es, di, ds, si, ds, bx
 
 	; ES:DI - Sample binary structure in module
 	; DS:SI - mod.sample_hdr[]

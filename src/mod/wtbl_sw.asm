@@ -95,7 +95,7 @@ mod_swt_setup:
 
 	mov ebx, 1024 << LIN_IPOL_EXP	; 512 words for each step
 
-	log {'Allocating {u} bytes software wavetable linear interpolation lookup table', 13, 10}, ebx
+	log {'Allocating {u} bytes for software wavetable linear interpolation lookup table', 13, 10}, ebx
 
 	mov al, SYS_MEM_LO
 	call far sys_mem_alloc
