@@ -4,8 +4,6 @@
 ; API
 ;==============================================================================
 
-%include "system/consts/public.inc"
-
 extern sys_file_setup
 extern sys_file_shutdown
 extern sys_file_open

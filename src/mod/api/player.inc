@@ -4,7 +4,6 @@
 ; API
 ;==============================================================================
 
-%include "mod/consts/global.inc"
 %include "mod/consts/public.inc"
 %include "mod/structs/public.inc"
 

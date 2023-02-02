@@ -4,8 +4,6 @@
 ; API
 ;==============================================================================
 
-%include "system/consts/public.inc"
-
 extern sys_pic_irq_to_int
 extern sys_pic_irq_enabled
 extern sys_pic_enable_irq
