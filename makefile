@@ -60,6 +60,51 @@ obj: .SYMBOLIC .ALWAYS
 	if not exist obj\mod mkdir obj\mod
 	if not exist obj\system mkdir obj\system
 
+# .inc file dependencies
+
+src\debug\log.inc: &
+	src\debug\global.inc
+
+	wtouch src\debug\log.inc
+
+src\mod\api\player.inc: &
+	src\mod\consts\public.inc &
+	src\mod\structs\public.inc
+
+	wtouch src\mod\api\player.inc
+
+src\mod\structs\global.inc: &
+	src\mod\consts\global.inc &
+	src\mod\structs\public.inc &
+	src\mod\structs\out.inc &
+	src\mod\structs\routine.inc &
+	src\mod\structs\out_none.inc &
+	src\mod\structs\out_dac.inc &
+	src\mod\structs\out_sb.inc &
+	src\mod\structs\wtbl_sw.inc
+
+	wtouch src\mod\structs\global.inc
+
+src\mod\structs\routine.inc: &
+	src\mod\consts\global.inc
+
+	wtouch src\mod\structs\routine.inc
+
+src\mod\structs\wtbl_sw.inc: &
+	src\mod\consts\global.inc
+
+	wtouch src\mod\structs\wtbl_sw.inc
+
+src\system\api\dma.inc: &
+	src\system\consts\public.inc
+
+	wtouch src\system\api\dma.inc
+
+src\system\api\memory.inc: &
+	src\system\consts\public.inc
+
+	wtouch src\system\api\memory.inc
+
 # .obj file dependencies with included external files and build instructions
 
 obj\debug\log.obj: src\debug\log.asm &
