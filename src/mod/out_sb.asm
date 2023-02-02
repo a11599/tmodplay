@@ -371,7 +371,7 @@ setup:
 	mov al, ah
 
 .log_sb:
-	log {'Output device: Sound Blaster{s} on port {X16}, IRQ {u8}, DMA {u8}', 13, 10}, ds, ecx, [params(port)], [params(irq)], al
+	log {'Output device: Sound Blaster{s} on port {X16}, IRQ {u8}, DMA {u8}', 13, 10}, cs, ecx, [params(port)], [params(irq)], al
 
 	%endif
 
