@@ -176,12 +176,13 @@ segment app
 
 	; ---------------------------------------------------------------------
 	; Determine settings for auto stereo mode and interpolation
-	; EAX: MOD flags
+	; ECX: MOD flags
 	; BL: Number of channels
 
 	call far mod_get_channel_count
 	mov bl, al
 	call far mod_get_flags
+	mov ecx, eax
 
 	; Set sample interpolation mode to linear for multichannel and
 	; non-standard MOD files
@@ -190,7 +191,7 @@ segment app
 	jnz .auto_stereo_mode
 	cmp bl, 4
 	jne .linear_interpolation
-	test eax, MOD_FLG_PAN | MOD_FLG_EXT_OCT
+	test ecx, MOD_FLG_PAN | MOD_FLG_EXT_OCT
 	jz .auto_stereo_mode
 
 .linear_interpolation:
@@ -204,7 +205,7 @@ segment app
 
 	test byte [arg_flags], ARG_PAN_SET
 	jnz .play
-	test eax, MOD_FLG_PAN
+	test ecx, MOD_FLG_PAN
 	jz .play
 
 	log {'MOD uses pan command, choosing real stereo mode', 13, 10}
@@ -377,7 +378,7 @@ parse_args:
 
 	mov byte [ebx + mod_out_params.interpolation], MOD_IPOL_NN
 	mov byte [ebx + mod_out_params.stereo_mode], MOD_PAN_CROSS
-	mov byte [ebx + mod_out_params.initial_pan], 0x60
+	mov byte [ebx + mod_out_params.initial_pan], 0
 	mov word [ebx + mod_out_params.buffer_size], 20
 
 	; ---------------------------------------------------------------------
@@ -958,7 +959,7 @@ usage		db 'Usage: tmodplay <filename.mod> [options]',13, 10, 13, 10
 		db '                    - cross: Set 25% left/right from center (slower)', 13, 10
 		db '                    - real: Real panning via 8xx and E8x commands (slowest)', 13, 10, 13, 10
 		db '                    "panpct" specifies the initial left/right panning from', 13, 10
-		db '                    center for "real" mode.', 13, 10, 13, 10
+		db '                    center for "real" mode (default: 100%).', 13, 10, 13, 10
 		db '/amp:amplification  Output amplification between 0 - 4. Value is decimal.', 13, 10, 13, 10
 		db '/ipol:mode          Set sample interpolation mode for software wavetable', 13, 10
 		db '                    renderer. Accepted values for "mode":', 13, 10
