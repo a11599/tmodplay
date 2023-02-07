@@ -378,7 +378,7 @@ parse_args:
 
 	mov byte [ebx + mod_out_params.interpolation], MOD_IPOL_NN
 	mov byte [ebx + mod_out_params.stereo_mode], MOD_PAN_CROSS
-	mov byte [ebx + mod_out_params.initial_pan], 0
+	mov byte [ebx + mod_out_params.initial_pan], 0x80
 	mov word [ebx + mod_out_params.buffer_size], 20
 
 	; ---------------------------------------------------------------------
@@ -959,7 +959,7 @@ usage		db 'Usage: tmodplay <filename.mod> [options]',13, 10, 13, 10
 		db '                    - cross: Set 25% left/right from center (slower)', 13, 10
 		db '                    - real: Real panning via 8xx and E8x commands (slowest)', 13, 10, 13, 10
 		db '                    "panpct" specifies the initial left/right panning from', 13, 10
-		db '                    center for "real" mode (default: 100%).', 13, 10, 13, 10
+		db '                    center for "real" mode (default: 0%).', 13, 10, 13, 10
 		db '/amp:amplification  Output amplification between 0 - 4. Value is decimal.', 13, 10, 13, 10
 		db '/ipol:mode          Set sample interpolation mode for software wavetable', 13, 10
 		db '                    renderer. Accepted values for "mode":', 13, 10
