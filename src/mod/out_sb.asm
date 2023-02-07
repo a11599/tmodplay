@@ -9,14 +9,23 @@
 ;   - 8-bit stereo, up to 22050 Hz sample rate
 ; - Sound Blaster 16: 16-bit stereo, up to 44100 Hz sample rate
 ;------------------------------------------------------------------------------
-; DOSBox performance with 4-channels and Sound Blaster 16 at 44100 Hz, no
-; interpolation, no clipping, 20 msec buffer:
-; - MOD_PAN_MONO: ~1550 cycles (386dx @ ~8.5 MHz)
-; - MOD_PAN_HARD: ~1800 cycles (386dx @ ~10 MHz)
-; - MOD_PAN_CROSS: ~2650 cycles (386dx @ ~14.5 MHz)
-; - MOD_PAN_REAL: ~3000 cycles (386dx @ ~16.3 MHz)
-; Same with linear interpolation:
-; - MOD_PAN_REAL: ~5000 cycles (386dx @ ~27.2 MHz)
+; 86Box performance with Sound Blaster 16, 1x amplification, 20 msec buffer:
+;
+; Channels   Samplerate   Stereo mode   Interpolation   CPU (↑)
+;     4        44100 Hz   Mono          Linear          386dx/16
+;     4        44100 Hz   Cross         Nearest         386dx/16
+;     4        44100 Hz   Real          Nearest         386dx/20
+;     8        44100 Hz   Hard          Nearest         386dx/20
+;     4        44100 Hz   Real          Linear          386dx/25
+;     8        44100 Hz   Real          Nearest         386dx/33
+;     8        44100 Hz   Hard          Linear          386dx/33
+;     8        44100 Hz   Cross         Linear          386dx/40
+;     8        44100 Hz   Real          Linear          486dlc/33
+;    28        44100 Hz   Hard          Linear          486dx2/66
+;    28        28000 Hz   Real          Linear          486dx2/66
+;    28        44100 Hz   Real          Nearest         486dx2/80
+;    28        42000 Hz   Real          Linear          486dx4/100
+;    28        44100 Hz   Real          Linear          486dx4/120
 ;==============================================================================
 
 cpu 386

@@ -2,7 +2,6 @@
 ; MOD player - DAC output device
 ;------------------------------------------------------------------------------
 ; Supports via software wavetable rendering:
-; - No sound: no actual sound output, but keeps the MOD playroutine ticking
 ; - PC speaker: 8-bits, up to 32000 Hz sample rate
 ; - Parallel port DACs (aka. Covox): 8-bits, up to 100000 Hz sample rate:
 ;   - Mono LPT DAC on any parallel port
@@ -12,21 +11,45 @@
 ; All output devices utilize the timer interrupt (IRQ 0) for playback, which
 ; makes it unavailable for other purposes.
 ;------------------------------------------------------------------------------
-; DOSBox performance with 4-channels at 44100 Hz, no interpolation, no
-; clipping:
-; - PC speaker, mono LPT DAC: ~2600 cycles (386dx @ ~14.2 MHz)
-; - Dual LPT DACs:
-;   - MOD_PAN_MONO: ~2850 cycles (386dx @ ~15.5 MHz)
-;   - MOD_PAN_HARD: ~3050 cycles (386dx @ ~16.7 MHz)
-;   - MOD_PAN_CROSS: ~3850 cycles (386dx @ ~21 MHz)
-;   - MOD_PAN_REAL: ~4400 cycles (386dx @ ~24 MHz)
-; - Stereo LPT DAC (the extra channel selection I/O takes its toll in stereo):
-;   - MOD_PAN_MONO: ~2600 cycles (386dx @ ~14.2 MHz)
-;   - MOD_PAN_HARD: ~3450 cycles (386dx @ ~18.8 MHz)
-;   - MOD_PAN_CROSS: ~4550 cycles (386dx @ ~24.8 MHz)
-;   - MOD_PAN_REAL: ~4900 cycles (386dx @ ~26.7 MHz)
-; Same with linear interpolation:
-; - PC speaker, mono LPT DAC: ~4800 cycles (386dx @ ~26.2 MHz)
+; 86Box performance with 1x amplification, 20 msec buffer (PC speaker
+; performance is the same as a mono LPT DAC):
+;
+; DAC     Channels   Samplerate   Stereo mode   Interpolation   CPU (↑)
+; Mono        4        49716 Hz   -             Nearest         386dx/16
+; Dual        4        44192 Hz   Hard          Nearest         386dx/16
+; Stereo      4        41144 Hz   Hard          Nearest         386dx/16
+; Mono        4        42617 Hz   -             Linear          386dx/20
+; Dual        4        56818 Hz   Hard          Nearest         386dx/20
+; Stereo      4        51878 Hz   Hard          Nearest         386dx/20
+; Dual        4        39773 Hz   Hard          Linear          386dx/20
+; Stereo      4        37287 Hz   Hard          Linear          386dx/20
+; Dual        4        31400 Hz   Real          Linear          386dx/20
+; Stereo      4        29830 Hz   Real          Linear          386dx/20
+; Mono        4        74574 Hz   -             Nearest         386dx/25
+; Mono        4        54236 Hz   -             Linear          386dx/25
+; Dual        4        49716 Hz   Hard          Linear          386dx/25
+; Stereo      4        47727 Hz   Hard          Linear          386dx/25
+; Dual        4        49716 Hz   Real          Nearest         386dx/25
+; Stereo      4        47727 Hz   Real          Nearest         386dx/25
+; Mono        8        49716 Hz   -             Nearest         386dx/25
+; Dual        8        47727 Hz   Hard          Nearest         386dx/25
+; Stereo      8        45892 Hz   Hard          Nearest         386dx/25
+; Dual        4        38490 Hz   Real          Linear          386dx/25
+; Stereo      4        37287 Hz   Real          Linear          386dx/25
+; Mono        4        99432 Hz   -             Nearest         386dx/33
+; Mono        4        70187 Hz   -             Linear          386dx/33
+; Dual        4        91783 Hz   Hard          Nearest         386dx/33
+; Stereo      4        85227 Hz   Hard          Nearest         386dx/33
+; Dual        4        51878 Hz   Real          Linear          386dx/33
+; Stereo      4        49716 Hz   Real          Linear          386dx/33
+; Mono        8        42614 Hz   -             Linear          386dx/33
+; Dual        8        39773 Hz   Real          Nearest         386dx/33
+; Stereo      8        38490 Hz   Real          Nearest         386dx/33
+; Dual        8        41144 Hz   Hard          Linear          386dx/33
+; Stereo      8        39773 Hz   Hard          Linear          386dx/33
+; Mono        8        49716 Hz   -             Linear          386dx/40
+; Dual        8        39773 Hz   Real          Linear          386dx/40
+; Stereo      8        38490 Hz   Real          Linear          386dx/40
 ;==============================================================================
 
 cpu 386
