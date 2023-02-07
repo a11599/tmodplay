@@ -11,7 +11,7 @@
 ;------------------------------------------------------------------------------
 ; 86Box performance with Sound Blaster 16, 1x amplification, 20 msec buffer:
 ;
-; Channels   Samplerate   Stereo mode   Interpolation   CPU (↑)
+; Channels   Samplerate   Stereo mode   Interpolation   CPU
 ;     4        44100 Hz   Mono          Linear          386dx/16
 ;     4        44100 Hz   Cross         Nearest         386dx/16
 ;     4        44100 Hz   Real          Nearest         386dx/20

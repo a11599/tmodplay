@@ -14,7 +14,7 @@
 ; 86Box performance with 1x amplification, 20 msec buffer (PC speaker
 ; performance is the same as a mono LPT DAC):
 ;
-; DAC     Channels   Samplerate   Stereo mode   Interpolation   CPU (↑)
+; DAC     Channels   Samplerate   Stereo mode   Interpolation   CPU
 ; Mono        4        49716 Hz   -             Nearest         386dx/16
 ; Dual        4        44192 Hz   Hard          Nearest         386dx/16
 ; Stereo      4        41144 Hz   Hard          Nearest         386dx/16
