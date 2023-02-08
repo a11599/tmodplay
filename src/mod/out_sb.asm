@@ -1119,7 +1119,8 @@ reset_dsp:
 	test al, 0x80
 	jnz .check_dsp
 	call wait_55ms
-	loop .check_reset_done_loop, cx
+	dec cx
+	jnz .check_reset_done_loop
 
 .check_dsp:
 	sub dl, 4			; DX: 2xA, DSP read data port

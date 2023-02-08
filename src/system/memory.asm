@@ -1346,7 +1346,8 @@ setup_flat_real_mode:
 	jne .v86_error
 	add ebx, 0x1000
 	add di, 4
-	loop .check_640k_loop, cx
+	dec cx
+	jnz .check_640k_loop
 
 	; Setup page directory and get page directory physical address from
 	; first page table
@@ -1432,7 +1433,8 @@ setup_flat_real_mode:
 .idt_int_loop:
 	stosd
 	add ax, VCPI_INT_HANDLER_STUB_SIZE
-	loop .idt_int_loop
+	dec cx
+	jnz .idt_int_loop
 
 	; Switch to flat real mode
 

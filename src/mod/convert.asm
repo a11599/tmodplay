@@ -100,7 +100,8 @@ mod_period_floor_seminote:
 	cmp dx, es:[pertab + ebx * 2]
 	jae .found_period
 	inc ebx
-	loop .find_period, cx
+	dec cx
+	jnz .find_period
 
 .found_period:
 	mov cx, es:[pertab + ebx * 2]

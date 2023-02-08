@@ -255,7 +255,8 @@ sys_str_char_rpos:
 	cmp al, ah			; Found character?
 	loopne .find_loop, ecx		; Nope, try next
 	mov ebx, esi			; Found, update occurence offset
-	loop .find_loop, ecx
+	dec ecx
+	jnz .find_loop
 
 .check_find:
 	pop esi
@@ -584,7 +585,8 @@ sys_str_hex:
 	add bl, '0'			; Convert to ASCII
 	mov [esi], bl
 	shr eax, 4
-	loop .next_nibble, cx
+	dec cx
+	jnz .next_nibble
 
 	pop esi
 	pop ecx
@@ -945,7 +947,8 @@ sys_str_format:
 	jz .skip_variable		; End of string
 	mov [edi], al			; Copy to target string
 	inc edi
-	loop .copy_string_loop, ecx
+	dec ecx
+	jnz .copy_string_loop
 
 .skip_variable:
 
@@ -1037,7 +1040,8 @@ sys_str_parse_int:
 	add edx, eax			; Result * 10 + current character
 	cmp edx, 0x80000000		; Overflow
 	jae .error
-	loop .convert_loop, cx
+	dec cx
+	jnz .convert_loop
 
 .done:
 	add sp, 4			; Discard EAX from stack
@@ -1355,7 +1359,8 @@ sys_str_parse_hex:
 	shl edx, 4
 	movzx eax, al			; Zero-extend
 	add edx, eax			; Result * 10 + current character
-	loop .convert_loop, cx
+	dec cx
+	jnz .convert_loop
 
 .done:
 	add sp, 4			; Discard EAX from stack

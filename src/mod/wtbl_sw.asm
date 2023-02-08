@@ -68,7 +68,8 @@ mod_swt_setup:
 	mov [bx], ax			; AX: channel data structure offset
 	add bx, 2
 	add ax, channel.strucsize	; Advance offset
-	loop .loop_channel_ofs, cx
+	dec cx
+	jnz .loop_channel_ofs
 
 	pop ecx
 
@@ -466,7 +467,8 @@ mod_swt_init_ipoltab:
 	jle .loop_samples_neg
 
 	inc si
-	loop .loop_samples, cx
+	dec cx
+	jnz .loop_samples
 
 .exit:
 	pop es
@@ -552,7 +554,8 @@ mod_swt_upload_sample:
 	mov esi, ebx
 
 .next_sample:
-	loop .loop_unroll, cx
+	dec cx
+	jnz .loop_unroll
 
 .done:
 	pop esi
@@ -643,7 +646,8 @@ mod_swt_reset_channels:
 	inc al
 	and al, 0x03
 	add di, channel.strucsize
-	loop .loop_channels, cx
+	dec cx
+	jnz .loop_channels
 
 .exit:
 	pop es
@@ -1364,7 +1368,8 @@ mod_swt_set_mixer:
 
 %macro	convert_buffer_next_sample 0
 
-	loop .loop_buffer, cx
+	dec cx
+	jnz .loop_buffer
 	add edi, [mod.instance_addr]
 	retn
 

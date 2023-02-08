@@ -145,7 +145,8 @@ mod_setup:
 	mov ax, cs:[si]
 	stosw
 	add si, 2
-	loop .loop_out_fns, cx
+	dec cx
+	jnz .loop_out_fns
 
 	pop eax
 	pop ecx

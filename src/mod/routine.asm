@@ -93,7 +93,8 @@ mod_playroutine_reset:
 	mov byte [si + channel(play_volume)], 64
 	mov word [si + channel(sample_hdr_ofs)], -1
 	add si, mod_routine_channel.strucsize
-	loop .loop_reset_channel, cx
+	dec cx
+	jnz .loop_reset_channel
 
 	pop es
 	pop di

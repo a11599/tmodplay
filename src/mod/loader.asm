@@ -88,7 +88,8 @@ mod_load_header:
 	mov ax, es:[di + bx]
 	mov [si + bx], ax
 	add bx, 2
-	loop .loop_title, cx
+	dec cx
+	jnz .loop_title
 	mov byte [mod.title + 20], 0	; Extra zero for ASCIIZ
 
 	log {'Song title: {s}', 13, 10}, ds, mod.title
@@ -213,7 +214,8 @@ mod_load_header:
 .copy_seq_pos:
 	mov [si + bx], al
 	inc bx
-	loop .loop_seq_pos, cx
+	dec cx
+	jnz .loop_seq_pos
 
 	; Got number of patterns in AH; it's the largest pattern number in the
 	; sequence + 1
@@ -255,7 +257,8 @@ mod_load_header:
 	mov ax, es:[di + bx]
 	mov [si + sample(name) + bx], ax
 	add bx, 2
-	loop .loop_sample_name, cx
+	dec cx
+	jnz .loop_sample_name
 	mov byte [si + sample(name) + 22], 0
 
 	pop ecx
@@ -402,7 +405,8 @@ mod_load_header:
 
 	add eax, edx
 	add si, 4
-	loop .loop_pattern_addr, cx
+	dec cx
+	jnz .loop_pattern_addr
 
 	log {'Converting ProTracker note structure', 13, 10}
 
