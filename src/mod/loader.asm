@@ -30,6 +30,8 @@ segment modplayer
 ;    EAX - Error code if cannot be loaded
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_load_header
 mod_load_header:
 	push ebx
@@ -423,6 +425,8 @@ mod_load_header:
 	shl esi, 6
 	mov edi, [mod.pattern_addr]
 	xor ebp, ebp			; EBP: MOD flags
+
+	align 4
 
 .loop_note_convert:
 	mov cx, [edi]

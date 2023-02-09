@@ -18,6 +18,8 @@ segment system
 ;    BX - PIT rate
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_pit_calc_rate
 sys_pit_calc_rate:
 	push ecx
@@ -88,6 +90,8 @@ sys_pit_calc_rate:
 ; -> BX - PIT rate
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_pit_set_irq0_rate
 sys_pit_set_irq0_rate:
 	push ax
@@ -106,6 +110,8 @@ sys_pit_set_irq0_rate:
 ;------------------------------------------------------------------------------
 ; Restore channel 0 of the PIT (IRQ0) to original state.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_pit_reset_irq0_rate
 sys_pit_reset_irq0_rate:

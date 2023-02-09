@@ -39,6 +39,8 @@ segment modplayer
 ;          generated at the end of each sample (must reserve enough space)
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_swt_setup
 mod_swt_setup:
 	push ebx
@@ -153,6 +155,8 @@ mod_swt_setup:
 ; -> DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_swt_shutdown
 mod_swt_shutdown:
 	push eax
@@ -200,6 +204,8 @@ mod_swt_shutdown:
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_swt_set_amplify
 mod_swt_set_amplify:
 	cmp ax, [state(amplify)]
@@ -218,6 +224,8 @@ mod_swt_set_amplify:
 ; -> AL - Sample interpolation method (MOD_IPOL_*)
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_swt_set_interpolation
 mod_swt_set_interpolation:
@@ -249,6 +257,8 @@ mod_swt_set_interpolation:
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_swt_set_stereo_mode
 mod_swt_set_stereo_mode:
 	push eax
@@ -272,6 +282,8 @@ mod_swt_set_stereo_mode:
 ;------------------------------------------------------------------------------
 ; -> DS - Player instance segment
 ;------------------------------------------------------------------------------
+
+	align 4
 
 mod_swt_init_voltab:
 	push eax
@@ -323,6 +335,8 @@ mod_swt_init_voltab:
 	and ch, FMT_BITDEPTH		; CH: device output bitdepth
 	mov cl, 1			; CL: volume
 
+	align 4
+
 .loop_volume:
 	xor ebp, ebp			; (E)BP: sample value, -128 - 127
 
@@ -354,6 +368,8 @@ mod_swt_init_voltab:
 	shr edx, 6			; remainder: 0 - 63 -> 0; 64 - 126 -> 1
 	add edx, eax			; round(volume * eff. amp * 32767 / 127)
 
+	align 4
+
 .loop_scale_sample:
 	mov eax, ebp
 	cmp eax, 0			; If sample = 0, output is also 0
@@ -384,6 +400,8 @@ mod_swt_init_voltab:
 	mov ebp, -128
 	jmp .loop_scale_sample
 
+	align 4
+
 .next_vol:
 	inc cl				; Next volume
 	cmp cl, 64
@@ -407,6 +425,8 @@ mod_swt_init_voltab:
 ;------------------------------------------------------------------------------
 ; -> DS - Player instance segment
 ;------------------------------------------------------------------------------
+
+	align 4
 
 mod_swt_init_ipoltab:
 	push eax
@@ -443,6 +463,8 @@ mod_swt_init_ipoltab:
 
 	; Calculate fractional values for positive range (0 -> 255).
 
+	align 4
+
 .loop_samples_pos:
 	mov ax, bx
 	imul si
@@ -455,6 +477,8 @@ mod_swt_init_ipoltab:
 	mov bx, -255
 
 	; Calculate fractional values for negative range (-255 -> 0).
+
+	align 4
 
 .loop_samples_neg:
 	mov ax, bx
@@ -492,6 +516,8 @@ mod_swt_init_ipoltab:
 ;    DH - Set to 1 if the sample can be removed from RAM (wavetable has
 ;         own internal sample memory)
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_swt_upload_sample
 mod_swt_upload_sample:
@@ -534,6 +560,8 @@ mod_swt_upload_sample:
 	%endif
 	jmp .done
 
+	align 4
+
 .unroll_looped_sample:
 
 	; Sample repeat -> unroll loop
@@ -544,6 +572,8 @@ mod_swt_upload_sample:
 	mov esi, ebx			; ES:ESI: sample repeat start position
 	add esi, eax
 	mov cx, UNROLL_SAMPLES
+
+	align 4
 
 .loop_unroll:
 	mov al, es:[esi]		; Unroll repeat loop
@@ -592,6 +622,8 @@ mod_swt_upload_sample:
 ;    EAX - Error code if CF set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_swt_free_sample
 mod_swt_free_sample:
 	clc
@@ -604,6 +636,8 @@ mod_swt_free_sample:
 ; -> DH - Initial pan for real stereo mixing
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_swt_reset_channels
 mod_swt_reset_channels:
@@ -671,6 +705,8 @@ mod_swt_reset_channels:
 ;            SI to -1 to stop playing in this channel.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_swt_set_sample
 mod_swt_set_sample:
 	push bx
@@ -710,6 +746,8 @@ mod_swt_set_sample:
 ;    CX.DX - Playback speed as 16.16 fixed-point number
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_swt_set_mixer
 mod_swt_set_mixer:
@@ -787,6 +825,8 @@ mod_swt_set_mixer:
 ; <- CL - Pan bitshift
 ;    CH - Left/right channel volume
 ;------------------------------------------------------------------------------
+
+	align 4
 
 .calc_pan_volume:
 	push eax
@@ -921,6 +961,8 @@ mod_swt_set_mixer:
 	jae %%no_sample			; Sample end reached
 	jmp %%init_sample_length
 
+	align 4
+
 %%init_looped_sample:
 	mov cs:[%%sample_rpt_len], ebx
 	mov byte cs:[%%reset_sample_jmp_dest], %%loop_sample - %%reset_sample_jmp
@@ -1023,6 +1065,8 @@ mod_swt_set_mixer:
 	; Handle end of sample scenarios (kept close to %%loop_render_unrolled
 	; to enable using short jumps)
 
+	align 4
+
 %%loop_sample:
 
 	; Looped sample - wrapback if repeat end exceeded
@@ -1030,6 +1074,8 @@ mod_swt_set_mixer:
 	sub esi, 0x12345678		; Wrap back by length of loop
 	%%sample_rpt_len EQU $ - 4
 	jmp %%loop_render_unrolled	; Render next sample
+
+	align 4
 
 %%no_sample:
 
@@ -1067,6 +1113,8 @@ mod_swt_set_mixer:
 	; ---------------------------------------------------------------------
 	; Unrolled sample render loop
 
+	align 4
+
 %%loop_render_next:
 
 	; The render loop jumps here AFTER a full unrolled loop finished. This
@@ -1074,8 +1122,6 @@ mod_swt_set_mixer:
 	; unrolled loop at a specific position.
 
 	sub ebp, UNROLL_COUNT * 65536
-
-%%loop_render:
 
 	; Check if we can render a full loop (this is skipped for the very first
 	; round by the code above %%loop_render_partial).
@@ -1086,7 +1132,7 @@ mod_swt_set_mixer:
 %%loop_render_unrolled:
 
 	; Check if end of sample has reached. When yes, jump to either
-	; %%loop_sample or %%stop_sample, depending on whether the samle is
+	; %%loop_sample or %%stop_sample, depending on whether the sample is
 	; looped or not.
 
 	cmp esi, 0x12345678		; End of loop or sample?
@@ -1206,6 +1252,8 @@ mod_swt_set_mixer:
 	; ---------------------------------------------------------------------
 	; Jump table for partial rendering
 
+	align 4
+
 %%render_cnt_tab:
 	%assign rendercnt 0
 	%rep UNROLL_COUNT
@@ -1267,6 +1315,8 @@ mod_swt_set_mixer:
 	; ---------------------------------------------------------------------
 	; Conversion loop
 
+	align 4
+
 .loop_buffer:
 
 	; Get 32-bit sample from wavetable render buffer
@@ -1311,6 +1361,8 @@ mod_swt_set_mixer:
 
 	%if (%3 = FMT_SIGNED)
 
+	align 4
+
 %%clip_pos:
 
 	; Positive clipping
@@ -1324,6 +1376,8 @@ mod_swt_set_mixer:
 	%endif
 
 	convert_buffer_next_sample
+
+	align 4
 
 %%clip_neg:
 
@@ -1340,6 +1394,8 @@ mod_swt_set_mixer:
 	convert_buffer_next_sample
 
 	%elif (%3 = FMT_UNSIGNED)
+
+	align 4
 
 %%clip_unsigned:
 	cmp eax, 0
@@ -1387,27 +1443,35 @@ mod_swt_set_mixer:
 ;    Destroys everything except segment registers.
 ;------------------------------------------------------------------------------
 
+	align 4
 out_8bit_mono_signed:
 	convert_buffer FMT_8BIT, FMT_MONO, FMT_SIGNED
 
+	align 4
 out_16bit_mono_signed:
 	convert_buffer FMT_16BIT, FMT_MONO, FMT_SIGNED
 
+	align 4
 out_8bit_stereo_signed:
 	convert_buffer FMT_8BIT, FMT_STEREO, FMT_SIGNED
 
+	align 4
 out_16bit_stereo_signed:
 	convert_buffer FMT_16BIT, FMT_STEREO, FMT_SIGNED
 
+	align 4
 out_8bit_mono_unsigned:
 	convert_buffer FMT_8BIT, FMT_MONO, FMT_UNSIGNED
 
+	align 4
 out_16bit_mono_unsigned:
 	convert_buffer FMT_16BIT, FMT_MONO, FMT_UNSIGNED
 
+	align 4
 out_8bit_stereo_unsigned:
 	convert_buffer FMT_8BIT, FMT_STEREO, FMT_UNSIGNED
 
+	align 4
 out_16bit_stereo_unsigned:
 	convert_buffer FMT_16BIT, FMT_STEREO, FMT_UNSIGNED
 
@@ -1423,47 +1487,85 @@ out_16bit_stereo_unsigned:
 ; <- Destroys everything except segment registers.
 ;------------------------------------------------------------------------------
 
+	align 4
 render_left_store:
 	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
+
+	align 4
 render_left_mix:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
+
+	align 4
 render_right_store:
 	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
+
+	align 4
 render_right_mix:
 	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
+
+	align 4
 render_leftx_store:
 	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_NN, 0
+
+	align 4
 render_leftx_mix:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_NN, 0
+
+	align 4
 render_rightx_store:
 	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_NN, 0
+
+	align 4
 render_rightx_mix:
 	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_NN, 0
+
+	align 4
 render_stereo_store:
 	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN, 0
+
+	align 4
 render_stereo_mix:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN, 0
 
 ; Same for linear interpolation
 
+	align 4
 render_left_store_lin:
 	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_left_store
+
+	align 4
 render_left_mix_lin:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_left_mix
+
+	align 4
 render_right_store_lin:
 	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_right_store
+
+	align 4
 render_right_mix_lin:
 	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_right_mix
+
+	align 4
 render_leftx_store_lin:
 	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_LIN, render_leftx_store
+
+	align 4
 render_leftx_mix_lin:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_LIN, render_leftx_mix
+
+	align 4
 render_rightx_store_lin:
 	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_LIN, render_rightx_store
+
+	align 4
 render_rightx_mix_lin:
 	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_LIN, render_rightx_mix
+
+	align 4
 render_stereo_store_lin:
 	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN, render_stereo_store
+
+	align 4
 render_stereo_mix_lin:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN, render_stereo_mix
 
@@ -1477,6 +1579,8 @@ render_stereo_mix_lin:
 ; <- EDI - Linear address of output device buffer after last rendered sample
 ;    Destroys everything except segment registers.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_swt_render
 mod_swt_render:
@@ -1586,6 +1690,8 @@ mod_swt_render:
 ;    EDI - Linear address of output device buffer
 ; <- Destroys everything except segment registers and EDI.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_swt_render_direct
 mod_swt_render_direct:

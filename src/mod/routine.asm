@@ -43,6 +43,8 @@ segment modplayer
 ; -> DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_playroutine_reset
 mod_playroutine_reset:
 	push eax
@@ -143,6 +145,8 @@ mod_playroutine_reset:
 ; <- Destroys everything except segment registers
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_playroutine_tick
 mod_playroutine_tick:
 	push fs
@@ -160,6 +164,8 @@ mod_playroutine_tick:
 	xor al, al
 	mov si, state(channels)
 	mov edi, [state(pattern_addr)]
+
+	align 4
 
 .loop_channels:
 
@@ -228,6 +234,8 @@ mod_playroutine_tick:
 
 	jmp .change_sample
 
+	align 4
+
 .change_sample_tone_portamento:
 	cmp dl, 0x03
 	je .check_period
@@ -256,9 +264,13 @@ mod_playroutine_tick:
 	je .fx_tone_portamento_set
 	jmp .set_period
 
+	align 4
+
 .fx_finetune_period:			; E5y: set finetune
 	call fx_set_finetune
 	jmp .set_period
+
+	align 4
 
 .fx_tone_portamento_set:		; 3xy, 5xy: tone portamento (+ volslide)
 	mov ah, [si + channel(finetune)]
@@ -271,9 +283,13 @@ mod_playroutine_tick:
 	mov byte [si + channel(toneporta_dir)], 1
 	jmp .note_fx
 
+	align 4
+
 .fx_tone_portamento_clear:
 	mov word [si + channel(toneporta_per)], 0
 	jmp .note_fx
+
+	align 4
 
 .set_period:
 
@@ -316,6 +332,8 @@ mod_playroutine_tick:
 	mov word [si + channel(sample_pos)], bp
 	jmp .note_fx
 
+	align 4
+
 .pattern_delay_tick:
 
 	;----------------------------------------------------------------------
@@ -325,6 +343,8 @@ mod_playroutine_tick:
 	call_fx fxtab_pattdel
 	jmp .set_wt
 
+	align 4
+
 .intra_tick:
 
 	;----------------------------------------------------------------------
@@ -333,6 +353,8 @@ mod_playroutine_tick:
 	mov dx, [si + channel(effect)]
 	call_fx fxtab_intra
 	jmp .set_wt
+
+	align 4
 
 .note_fx:
 
@@ -524,6 +546,8 @@ mod_playroutine_tick:
 ; Change pitch to wanted note, then x, then y halfnotes higher on each tick.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_arpeggio:
 	mov bl, [state(tick)]
 	xor bh, bh
@@ -554,6 +578,8 @@ fx_arpeggio:
 ; Increase current note pitch/decrease period by xx units.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_portamento_up:
 	mov cx, [si + channel(period)]	; CX: period
 	mov dl, dh
@@ -575,6 +601,8 @@ fx_portamento_up:
 ; 2xx - Portamento down
 ; Decrease current note pitch/increase period by xx units.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_portamento_down:
 	mov cx, [si + channel(period)]	; CX: period
@@ -598,6 +626,8 @@ fx_portamento_down:
 ; Slide the pitch of the current note towards the specified destination note
 ; by xx units. If xx is zero, previously used value is applied.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_tone_portamento:
 	test dh, dh			; Save portamento speed
@@ -628,6 +658,8 @@ fx_tone_portamento_no_param:
 	mov word [si + channel(toneporta_per)], 0
 	retn
 
+	align 4
+
 .tone_portamento_up:
 	sub cx, dx			; Pitch up -> subtract delta from period
 	cmp cx, bx
@@ -655,6 +687,8 @@ fx_tone_portamento_no_param:
 ; playback speed, does not change the stored pitch (period) for the channel. If
 ; either x or y is zero, previously used values are applied.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_vibrato:
 	test dh, dh			; Update stored parameter
@@ -689,11 +723,15 @@ fx_vibrato_no_param:
 	mov bl, 255			; BL: vibrato multiplier
 	jmp .use_multiplier		; Square wave
 
+	align 4
+
 .ramp_down:
 	test dl, 0x80			; Sawtooth
 	jz .use_multiplier
 	xor bl, 255			; BL: vibrato multiplier (invert)
 	jmp .use_multiplier
+
+	align 4
 
 .sine_wave:
 	xor bh, bh			; Sine wave
@@ -715,6 +753,8 @@ fx_vibrato_no_param:
 	add cx, bx			; Positive vibrato -> decrease pitch
 	jmp .apply_delta
 
+	align 4
+
 .negative_wave:
 	sub cx, bx			; Negative vibrato -> increase pitch
 
@@ -733,6 +773,8 @@ fx_vibrato_no_param:
 ; previously used tone portamento effect parameters (same as Axy with 300).
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_tone_vol_slide:
 	push dx				; Call tone portamento without parameter
 	call fx_tone_portamento_no_param
@@ -745,6 +787,8 @@ fx_tone_vol_slide:
 ; Apply volume slide with given xy parameters and continues vibrato with
 ; previously used vibrato speed and depth parameters (same as Axy with 400).
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_vibrato_vol_slide:
 	push dx				; Call tone portamento without parameter
@@ -759,6 +803,8 @@ fx_vibrato_vol_slide:
 ; playback volume, does not change the stored volume for the channel. If
 ; either x or y is zero, previously used values are applied.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_tremolo:
 	test dh, dh			; Update stored parameter
@@ -793,6 +839,8 @@ fx_tremolo:
 	mov bl, 255			; BL: tremolo multiplier
 	jmp .use_multiplier		; Square wave
 
+	align 4
+
 .ramp_down:
 	test byte [si + channel(vibrato_pos)], 0x80 ; Sawtooth
 	; ^^^ Yes, this is a copy-paste monster from ProTracker. They forgot to
@@ -801,6 +849,8 @@ fx_tremolo:
 	jz .use_multiplier
 	xor bl, 255			; BL: tremolo multiplier (invert)
 	jmp .use_multiplier
+
+	align 4
 
 .sine_wave:
 	xor bh, bh			; Sine wave
@@ -825,6 +875,8 @@ fx_tremolo:
 	mov bh, 64
 	jmp .apply_delta
 
+	align 4
+
 .negative_wave:
 	sub bh, bl			; Negative tremolo -> increase volume
 	jns .apply_delta		; Limit lowest volume to 0
@@ -845,6 +897,8 @@ fx_tremolo:
 ; right.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_set_fine_panning:
 	mov [si + channel(pan)], dh
 	or byte [si + channel(mixer_flags)], MIX_SET_PAN
@@ -855,6 +909,8 @@ fx_set_fine_panning:
 ; 9xx - Sample offset
 ; Play the instrument from the xxth byte sample offset.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_sample_offset:
 	test dh, dh
@@ -876,6 +932,8 @@ fx_sample_offset:
 ; Slide the volume up or down. y decreases and x increases the volume. When
 ; both are present, x (slide volume down) takes precedence.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_volume_slide:
 	test dh, 0x0f
@@ -907,6 +965,8 @@ fx_volume_slide:
 ; the Dxx command will be used as the target.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_position_jump:
 	mov [state(break_position)], dh	; Save target position
 	mov byte [state(break_row)], 0
@@ -918,6 +978,8 @@ fx_position_jump:
 ; Cxx - Set volume
 ; Set the volume of the channel to xx.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_set_volume:
 	cmp dh, 64
@@ -939,6 +1001,8 @@ fx_set_volume:
 ; 25 (10 + 15). If a following channel has Bxx effect, the target row is reset
 ; to 0.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_pattern_break:
 	mov dl, dh			; Convert the weirdo BCD-like parameter
@@ -968,11 +1032,15 @@ fx_pattern_break:
 ; Set the speed (ticks per row) if xx < 20 (hex) or tempo (BPM) if xx >= 20.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_set_speed:
 	cmp dh, 0x20
 	jae .set_bpm
 	mov [state(speed)], dh		; Set ticks per row
 	retn
+
+	align 4
 
 .set_bpm:
 	mov [state(bpm)], dh		; Set tempo (BPM)
@@ -993,6 +1061,8 @@ fx_set_speed:
 ; x = 1: Enable glissando (slide by semitones)
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_glissando_ctrl:
 	mov [si + channel(glissando_flag)], dh
 	retn
@@ -1007,6 +1077,8 @@ fx_glissando_ctrl:
 ; The waveforms restart if a note is specified. Add 4 to ignore the note. Then
 ; the waveforms will continue through the new note.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_set_vibrato_ctrl:
 	and dh, 0x0f
@@ -1025,6 +1097,8 @@ fx_set_vibrato_ctrl:
 ; from critical parts of the playroutine.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_set_finetune:
 	test dh, 0x08			; Extend to signed small int - this is
 	jz .save_finetune		; harmless since it's done anyways for
@@ -1040,6 +1114,8 @@ fx_set_finetune:
 ; Set loop start position within pattern if x = 0, repeat pattern between
 ; start position and end of current row x times if x > 0.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_pattern_loop:
 	test dh, dh
@@ -1061,9 +1137,13 @@ fx_pattern_loop:
 .exit:
 	retn
 
+	align 4
+
 .start_loop:
 	mov [state(loop_count)], dh
 	jmp .loop_jump
+
+	align 4
 
 .set_loop:
 	mov ah, [state(row)]
@@ -1081,6 +1161,8 @@ fx_pattern_loop:
 ; the waveforms will continue through the new note.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_set_tremolo_ctrl:
 	and dh, 0x0f
 	shl dh, 4
@@ -1096,6 +1178,8 @@ fx_set_tremolo_ctrl:
 ; Set the panning of the channel to x, where 0 is far left and F is far right
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_set_panning:
 	mov ah, dh
 	shl ah, 4
@@ -1109,6 +1193,8 @@ fx_set_panning:
 ; E9x - Retrig note
 ; Reset sample position every x ticks.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_retrig_note:
 	cmp dh, 1
@@ -1138,6 +1224,8 @@ fx_retrig_note:
 ; Slide volume up by x.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_fine_vol_up:
 	shl dh, 4
 	jmp fx_volume_slide
@@ -1148,6 +1236,8 @@ fx_fine_vol_up:
 ; Slide volume down by x.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 fx_fine_vol_down:
 	and dh, 0x0f
 	jmp fx_volume_slide
@@ -1157,6 +1247,8 @@ fx_fine_vol_down:
 ; ECx - Note cut
 ; Set the volume of the channel to 0 after x ticks.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_note_cut:
 	cmp [state(tick)], dh
@@ -1173,6 +1265,8 @@ fx_note_cut:
 ; EDx - Note delay
 ; Delay start of the instrument for x ticks.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_note_delay:
 	cmp [state(tick)], dh
@@ -1192,6 +1286,8 @@ fx_note_delay:
 ; EEx - Pattern delay
 ; Repeat the current row x times without retriggering notes.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 fx_pattern_delay:
 	mov [state(patt_delay)], dh

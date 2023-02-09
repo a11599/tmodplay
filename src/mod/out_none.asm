@@ -38,6 +38,8 @@ segment modplayer
 ;    EBX - 0 if no error
 ;------------------------------------------------------------------------------
 
+	align 4
+
 setup:
 	push edx
 
@@ -66,6 +68,8 @@ setup:
 ; -> DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 shutdown:
 	retn
 
@@ -73,6 +77,8 @@ shutdown:
 ;------------------------------------------------------------------------------
 ; Wavetable-related dummy no-op functions.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 upload_sample:
 	mov dh, 1			; No need to retain samples in memory
@@ -90,6 +96,8 @@ noop:
 ; -> DS - Player instance segment
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
+
+	align 4
 
 play:
 	push eax
@@ -114,7 +122,7 @@ play:
 	mov cs:[irq0_player_segment], ds
 	mov ax, cs
 	mov es, ax
-	mov bx, lpt_dac_irq0_handler
+	mov bx, null_irq0_handler
 	call far sys_set_int_handler
 
 	; Program the PIT
@@ -145,6 +153,8 @@ play:
 ; -> DS - Player instance segment
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
+
+	align 4
 
 stop:
 	push eax
@@ -185,6 +195,8 @@ stop:
 ; -> BX - Number of playroutine ticks per minute
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
+
+	align 4
 
 set_tick_rate:
 	push eax
@@ -270,6 +282,8 @@ set_tick_rate:
 	jmp %1
 	%endif
 
+	align 4
+
 %%call_prev_handler:
 	call prev_irq0_handler		; Call previous handler
 
@@ -286,6 +300,8 @@ set_tick_rate:
 ; Call the original IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 prev_irq0_handler:
 	pushf
 	call 0x1234:0x1234
@@ -294,12 +310,12 @@ prev_irq0_handler:
 
 
 ;------------------------------------------------------------------------------
-; Mono LPT DAC IRQ 0 handler.
+; No sound IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	alignb 4
+	align 4
 
-lpt_dac_irq0_handler:
+null_irq0_handler:
 	irq0_start
 
 	; DS: player instance segment
@@ -317,6 +333,8 @@ lpt_dac_irq0_handler:
 	mov [state(play_sam_int)], dx	; Update samples until playroutine tick
 
 	irq0_eoi 0
+
+	align 4
 
 .playroutine_tick:
 	push ebx

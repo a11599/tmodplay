@@ -26,6 +26,8 @@ segment system
 ;    EAX - Error code if CF is set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_file_setup
 sys_file_setup:
 	push ebx
@@ -54,6 +56,8 @@ sys_file_setup:
 ; sys_file_setup is called again.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_file_shutdown
 sys_file_shutdown:
 	push eax
@@ -75,6 +79,8 @@ sys_file_shutdown:
 ; <- CF - Set if error
 ;    EAX - File handle or error code if CF is set
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_file_open
 sys_file_open:
@@ -163,6 +169,8 @@ sys_file_open:
 ;    EAX - Error code if CF is set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_file_close
 sys_file_close:
 	push ax
@@ -190,6 +198,8 @@ sys_file_close:
 ; <- CF - Set if error
 ;    EAX - Number of bytes read or error code if CF is set
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_file_read
 sys_file_read:
@@ -313,6 +323,8 @@ sys_file_read:
 ;    EAX - Number of bytes written or error code if CF is set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_file_write
 sys_file_write:
 	push ecx
@@ -434,6 +446,8 @@ sys_file_write:
 ;    EAX - Error code if CF is set or actual new position
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_file_set_pos
 sys_file_set_pos:
 	push ecx			; Keep this in sync with
@@ -465,6 +479,8 @@ file_seek:
 ;    EAX - Error code if CF is set or current position
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_file_get_pos
 sys_file_get_pos:
 	push ecx			; Keep this in sync with
@@ -482,6 +498,8 @@ sys_file_get_pos:
 ; <- CF - Set if error
 ;    EAX - Error code if CF set or size of file
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_file_get_size
 sys_file_get_size:
@@ -519,6 +537,8 @@ sys_file_get_size:
 ;------------------------------------------------------------------------------
 ; <- EBX - Linear address of the I/O buffer
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_file_get_buf_addr
 sys_file_get_buf_addr:

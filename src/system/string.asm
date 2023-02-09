@@ -17,6 +17,8 @@ segment system
 ; <- ECX - Length of the string
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_str_len
 sys_str_len:
 	push ax
@@ -48,6 +50,8 @@ sys_str_len:
 ;------------------------------------------------------------------------------
 ; -> DS:ESI - Pointer to ASCIIZ string
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_reverse
 sys_str_reverse:
@@ -87,6 +91,8 @@ sys_str_reverse:
 ;    DS:ESI - Source ASCIIZ string
 ;    DS:EDI - Target buffer
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_copy
 sys_str_copy:
@@ -131,6 +137,8 @@ sys_str_copy:
 ;    DS:EDI - Target ASCIIZ string to which the source will be appended in
 ;             place
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_append
 sys_str_append:
@@ -187,6 +195,8 @@ sys_str_append:
 ;    EAX - Index of character's first occurence if CF is not set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_str_char_pos
 sys_str_char_pos:
 	push ebx
@@ -234,6 +244,8 @@ sys_str_char_pos:
 ; <- CF - Set if character was not found
 ;    EAX - Index of character's last occurence if CF is not set
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_char_rpos
 sys_str_char_rpos:
@@ -289,6 +301,8 @@ sys_str_char_rpos:
 ; <- CF - Set if the strings are different, false otherwise
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_str_cmp
 sys_str_cmp:
 	push ax
@@ -328,6 +342,8 @@ sys_str_cmp:
 ;    BL - Mode, 0 = unsigned, 1 = signed
 ;    DS:ESI - Buffer receiving ASCIIZ result string (min. 12 bytes)
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_int
 sys_str_int:
@@ -392,6 +408,8 @@ sys_str_int:
 ;    ECX - Fixed point base (value representing 1)
 ;    DS:ESI - Buffer receiving ASCIIZ result string
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_fixed
 sys_str_fixed:
@@ -546,6 +564,8 @@ sys_str_fixed:
 ;    DS:ESI - Buffer receiving ASCIIZ result string (min. BH + 1 bytes)
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_str_hex
 sys_str_hex:
 	test bh, bh
@@ -640,6 +660,8 @@ sys_str_hex:
 ; do an xchg ah, al / push eax / xchg ah, al at the expense of some extra
 ; processing.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_format
 sys_str_format:
@@ -970,6 +992,8 @@ sys_str_format:
 ;    DS:EDI - Pointer to terminator NUL of result string
 ;------------------------------------------------------------------------------
 
+	align 4
+
 .skip_dest_to_end:
 	mov al, [edi]
 	inc edi
@@ -989,6 +1013,8 @@ sys_str_format:
 ; <- CF - Set if error (invalid characters found)
 ;    EAX - Converted number
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_parse_int
 sys_str_parse_int:
@@ -1077,6 +1103,8 @@ sys_str_parse_int:
 ; <- CF - Set if error (invalid characters found)
 ;    EAX - Converted number
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_parse_fixed
 sys_str_parse_fixed:
@@ -1304,6 +1332,8 @@ sys_str_parse_fixed:
 ; <- CF - Set if error (invalid characters found)
 ;    EAX - Converted number
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_str_parse_hex
 sys_str_parse_hex:

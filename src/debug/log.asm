@@ -32,6 +32,8 @@ segment debug
 ;    EAX - Error code if CF set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global log_setup
 log_setup:
 	push eax
@@ -77,6 +79,8 @@ log_setup:
 ; logged after this call.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global log_shutdown
 log_shutdown:
 	push eax
@@ -98,6 +102,8 @@ log_shutdown:
 ;------------------------------------------------------------------------------
 ; Log flags to the standard output.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global log_flags
 log_flags:
@@ -159,6 +165,8 @@ log_flags:
 ;------------------------------------------------------------------------------
 ; -> SI - Offset of ASCIIZ string message in debug_data segment
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global log_format
 log_format:

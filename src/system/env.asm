@@ -16,6 +16,8 @@ segment system
 ; -> ES - PSP segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_env_setup
 sys_env_setup:
 	push eax
@@ -104,6 +106,8 @@ sys_env_setup:
 ;             the variable exists.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_env_get_var
 sys_env_get_var:
 	push eax
@@ -172,6 +176,8 @@ sys_env_get_var:
 ; <- CL - Number of arguments
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_env_get_arg_count
 sys_env_get_arg_count:
 	push eax
@@ -211,6 +217,8 @@ sys_env_get_arg_count:
 ; <- CF - Set if argument not found
 ;    DS:ESI - Pointer to ASCIIZ string containing argument if it exists.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_env_get_arg
 sys_env_get_arg:
@@ -266,6 +274,8 @@ sys_env_get_arg:
 ; <- CF - Set if argument not found
 ;    DS:ESI - Pointer to ASCIIZ string containing argument value if it exists.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_env_get_named_arg
 sys_env_get_named_arg:
@@ -330,6 +340,8 @@ sys_env_get_named_arg:
 ; <- DS:ESI - Pointer to ASCIIZ string containing the full path of the running
 ;             executable.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_env_get_exe_path
 sys_env_get_exe_path:

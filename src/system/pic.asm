@@ -17,6 +17,8 @@ segment system
 ; <- CH - Interrupt number
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_pic_irq_to_int
 sys_pic_irq_to_int:
 	mov ch, cl
@@ -35,6 +37,8 @@ sys_pic_irq_to_int:
 ; -> CL - IRQ number
 ; <- ZF - Set if IRQ is masked (ignored)
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_pic_irq_enabled
 sys_pic_irq_enabled:
@@ -78,6 +82,8 @@ sys_pic_irq_enabled:
 ; -> CL - IRQ number
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_pic_disable_irq
 sys_pic_disable_irq:
 	push ax
@@ -115,6 +121,8 @@ sys_pic_disable_irq:
 ; -> CL - IRQ number
 ;    CH - Set to 1 to force enabling the slave PIC for IRQ 8-15, 0 otherwise
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_pic_enable_irq
 sys_pic_enable_irq:

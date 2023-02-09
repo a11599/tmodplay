@@ -50,6 +50,8 @@ segment modplayer
 ; ** Some output devices ignore this setting.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_setup
 mod_setup:
 	push ebx
@@ -182,6 +184,8 @@ mod_setup:
 ; <- CF - Set on error
 ;    EAX - Error code if CF set
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_load
 mod_load:
@@ -329,6 +333,8 @@ mod_load:
 ;    EAX - Error code if CF set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_unload
 mod_unload:
 	push eax
@@ -417,6 +423,8 @@ mod_unload:
 ;    Player instance segment is no longer valid!
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_shutdown
 mod_shutdown:
 	push eax
@@ -457,6 +465,8 @@ mod_shutdown:
 ; <- EAX - MOD flags (MOD_FLG_*)
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_get_flags
 mod_get_flags:
 	mov eax, es:[mod.flags]
@@ -469,6 +479,8 @@ mod_get_flags:
 ; -> ES - Player instance segment
 ; <- AL - Number of channels
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_get_channel_count
 mod_get_channel_count:
@@ -484,6 +496,8 @@ mod_get_channel_count:
 ;------------------------------------------------------------------------------
 ; * See notes in mod_setup.
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_set_amplify
 mod_set_amplify:
@@ -506,6 +520,8 @@ mod_set_amplify:
 ;    ES - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_set_interpolation
 mod_set_interpolation:
 	push ax
@@ -526,6 +542,8 @@ mod_set_interpolation:
 ; -> AL - Stereo rendering mode (MOD_PAN_*)
 ;    ES - Player instance segment
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_set_stereo_mode
 mod_set_stereo_mode:
@@ -548,6 +566,8 @@ mod_set_stereo_mode:
 ; <- CF - Set on error
 ;    EAX - Error code if CF set
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_play
 mod_play:
@@ -590,6 +610,8 @@ mod_play:
 ;    EAX - Error code if CF set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_stop
 mod_stop:
 	push ds
@@ -629,6 +651,8 @@ mod_stop:
 ;------------------------------------------------------------------------------
 ; -> ES - Player instance segment
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_render
 mod_render:

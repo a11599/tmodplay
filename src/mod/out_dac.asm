@@ -96,6 +96,8 @@ segment modplayer
 ;          sample (must reserve enough space) if no error
 ;------------------------------------------------------------------------------
 
+	align 4
+
 setup:
 	push ecx
 	push edx
@@ -291,6 +293,8 @@ setup:
 ; -> DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 shutdown:
 	push eax
 
@@ -322,6 +326,8 @@ shutdown:
 ; <- AH.AL - Actual audio amplification level
 ;------------------------------------------------------------------------------
 
+	align 4
+
 set_amplify:
 	mov [state(amplify)], ax
 	call mod_swt_set_amplify
@@ -336,6 +342,8 @@ set_amplify:
 ; -> DS - Player instance segment
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
+
+	align 4
 
 play:
 	push eax
@@ -508,6 +516,8 @@ play:
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
 
+	align 4
+
 stop:
 	push eax
 	push bx
@@ -585,6 +595,8 @@ stop:
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 set_mixer:
 	test ah, 0x04
  	jz mod_swt_set_mixer
@@ -628,6 +640,8 @@ set_mixer:
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 set_tick_rate:
 	push eax
 	push ebx
@@ -663,6 +677,8 @@ set_tick_rate:
 ; -> DS - Player instance segment
 ; <- Destroys everything except segment registers
 ;------------------------------------------------------------------------------
+
+	align 4
 
 render:
 	mov al, BUF_RENDERING
@@ -814,6 +830,8 @@ render:
 	jmp %1
 	%endif
 
+	align 4
+
 %%call_prev_handler:
 	call prev_irq0_handler		; Call previous handler
 
@@ -853,6 +871,8 @@ render:
 ; Call the original IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 prev_irq0_handler:
 	pushf
 	call 0x1234:0x1234
@@ -864,7 +884,7 @@ prev_irq0_handler:
 ; PC speaker IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	alignb 4
+	align 4
 
 speaker_irq0_handler:
 	irq0_start
@@ -889,6 +909,8 @@ speaker_irq0_handler:
 	advance_buffer 4
 	irq0_eoi 0
 
+	align 4
+
 .clip:
 	cmp eax, 0
 	setg al				; AL: 1 if positive clip, else 0
@@ -905,7 +927,7 @@ speaker_irq0_handler:
 ; Mono LPT DAC IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	alignb 4
+	align 4
 
 lpt_dac_irq0_handler:
 	irq0_start
@@ -931,6 +953,8 @@ lpt_dac_irq0_handler:
 	advance_buffer 4
 	irq0_eoi 0
 
+	align 4
+
 .clip:
 	cmp eax, 0
 	setg al				; AL: 1 if positive clip, else 0
@@ -945,7 +969,7 @@ lpt_dac_irq0_handler:
 ; Stereo LPT DAC output IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	alignb 4
+	align 4
 
 lpt_dac_stereo_irq0_handler:
 	irq0_start
@@ -996,6 +1020,8 @@ lpt_dac_stereo_irq0_handler:
 	advance_buffer 0
 	irq0_eoi 0
 
+	align 4
+
 .clip_left:
 	cmp eax, 0
 	setg al				; AL: 1 if positive clip, else 0
@@ -1021,6 +1047,8 @@ lpt_dac_stereo_irq0_handler:
 	advance_buffer 0
 	irq0_eoi 0
 
+	align 4
+
 .clip_right:
 	cmp eax, 0
 	setg al				; AL: 1 if positive clip, else 0
@@ -1035,7 +1063,7 @@ lpt_dac_stereo_irq0_handler:
 ; Dual LPT DAC output IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	alignb 4
+	align 4
 
 lpt_dac_dual_irq0_handler:
 	irq0_start
@@ -1070,6 +1098,8 @@ lpt_dac_dual_irq0_handler:
 	advance_buffer 0
 	irq0_eoi 0
 
+	align 4
+
 .clip_left:
 	cmp eax, 0
 	setg al				; AL: 1 if positive clip, else 0
@@ -1088,6 +1118,8 @@ lpt_dac_dual_irq0_handler:
 	advance_buffer 0
 	irq0_eoi 0
 
+	align 4
+
 .clip_right:
 	cmp eax, 0
 	setg al				; AL: 1 if positive clip, else 0
@@ -1102,7 +1134,7 @@ lpt_dac_dual_irq0_handler:
 ; Dual LPT DAC forced mono output IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	alignb 4
+	align 4
 
 lpt_dac_dual_mono_irq0_handler:
 	irq0_start
@@ -1132,6 +1164,8 @@ lpt_dac_dual_mono_irq0_handler:
 	advance_buffer 4
 	irq0_eoi 0
 
+	align 4
+
 .clip:
 	cmp eax, 0
 	setg al				; AL: 1 if positive clip, else 0
@@ -1152,6 +1186,8 @@ lpt_dac_dual_mono_irq0_handler:
 ;------------------------------------------------------------------------------
 ; <- Destroys AH and DX
 ;------------------------------------------------------------------------------
+
+	align 4
 
 toggle_buffer_render:
 
@@ -1187,6 +1223,8 @@ toggle_buffer_render:
 .exit:
 	irq0_exit
 
+	align 4
+
 toggle_buffer:
 
 	; End of buffer reached, play next part of the triple buffer
@@ -1200,6 +1238,8 @@ toggle_buffer:
 	add [state(buffer_limit)], edx	; Adjust buffer upper limit for playback
 	add ah, BUF_RENDER_1 - 1	; Target render buffer: playing part - 1
 	irq0_eoi toggle_buffer_render
+
+	align 4
 
 .reset_buffer:
 

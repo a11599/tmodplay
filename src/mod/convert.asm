@@ -18,9 +18,13 @@ segment modplayer
 ; <- BX - Note (always an 8-bit value, but zero extended)
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_convert_period_to_note
 mod_convert_period_to_note:
 	mov bx, notetab
+
+	align 4
 
 .loop_notetab:
 	cmp cs:[bx], cx
@@ -43,6 +47,8 @@ mod_convert_period_to_note:
 ;    AH - Finetune (-8 - 7)
 ; <- CX - Period * 16
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global mod_note_finetune
 mod_note_finetune:
@@ -79,6 +85,8 @@ mod_note_finetune:
 ; <- CX - Period * 16 rounded down to nearest semitone
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_period_floor_seminote
 mod_period_floor_seminote:
 	push ax
@@ -95,6 +103,8 @@ mod_period_floor_seminote:
 	dec cx				; CX: period table length - 1
 	imul ah
 	movsx ebx, ax			; EBX: index into finetuned period table
+
+	align 4
 
 .find_period:
 	cmp dx, es:[pertab + ebx * 2]

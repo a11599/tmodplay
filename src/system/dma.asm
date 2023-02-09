@@ -21,6 +21,8 @@ segment system
 ; -> DL - DMA channel number
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global sys_dma_disable_channel
 sys_dma_disable_channel:
 	push ax
@@ -45,6 +47,8 @@ sys_dma_disable_channel:
 ;------------------------------------------------------------------------------
 ; -> DL - DMA channel number
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_dma_enable_channel
 sys_dma_enable_channel:
@@ -74,6 +78,8 @@ sys_dma_enable_channel:
 ;    DL - DMA channel number
 ;    DH - DMA mode (DMA_*)
 ;------------------------------------------------------------------------------
+
+	align 4
 
 global sys_dma_setup_channel
 sys_dma_setup_channel:

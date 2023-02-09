@@ -119,6 +119,8 @@ segment modplayer
 ;    DS:EBX - Filled with Sound Blaster-specific parameters when CF not set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 global mod_sb_detect
 mod_sb_detect:
 	push ecx
@@ -307,6 +309,8 @@ mod_sb_detect:
 ;    EBX - Number of extra samples that will be generated at the end of each
 ;          sample (must reserve enough space) if no error
 ;------------------------------------------------------------------------------
+
+	align 4
 
 setup:
 	push ecx
@@ -533,6 +537,8 @@ setup:
 ; -> DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 shutdown:
 	push eax
 
@@ -564,6 +570,8 @@ shutdown:
 ; <- AH.AL - Actual audio amplification level
 ;------------------------------------------------------------------------------
 
+	align 4
+
 set_amplify:
 	mov [state(amplify)], ax
 	call mod_swt_set_amplify
@@ -578,6 +586,8 @@ set_amplify:
 ; -> DS - Player instance segment
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
+
+	align 4
 
 play:
 	push eax
@@ -791,6 +801,8 @@ play:
 ; -> DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 .setup_autoinit_dma:
 	push ebx
 	push ecx
@@ -825,6 +837,8 @@ play:
 ; -> DS - Player instance segment
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
+
+	align 4
 
 stop:
 	push eax
@@ -913,6 +927,8 @@ stop:
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 set_mixer:
 	test ah, 0x04
  	jz mod_swt_set_mixer
@@ -956,6 +972,8 @@ set_mixer:
 ;    DS - Player instance segment
 ;------------------------------------------------------------------------------
 
+	align 4
+
 set_tick_rate:
 	push eax
 	push ebx
@@ -991,6 +1009,8 @@ set_tick_rate:
 ; -> DS - Player instance segment
 ; <- Destroys everything except segment registers
 ;------------------------------------------------------------------------------
+
+	align 4
 
 render:
 	mov al, BUF_RENDERING
@@ -1095,6 +1115,8 @@ render:
 ;    EAX - Error code if CF set
 ;------------------------------------------------------------------------------
 
+	align 4
+
 reset_dsp:
 	push cx
 	push dx
@@ -1147,6 +1169,8 @@ reset_dsp:
 ; Wait (at least) 55 milliseconds.
 ;------------------------------------------------------------------------------
 
+	align 4
+
 wait_55ms:
 	push ax
 	push es
@@ -1168,7 +1192,7 @@ wait_55ms:
 ; Sound Blaster IRQ handler.
 ;------------------------------------------------------------------------------
 
-	alignb 4
+	align 4
 
 irq_handler:
 	push eax
@@ -1207,6 +1231,8 @@ irq_handler:
 	in al, dx
 	jmp .ack_pic_irq
 
+	align 4
+
 .ack_sb2:
 
 	; Acknowledge IRQ on Sound Blaster / 2.0 / Pro
@@ -1214,6 +1240,8 @@ irq_handler:
 	add dl, 0x0e
 	in al, dx
 	jmp .ack_pic_irq
+
+	align 4
 
 .ack_sb16:
 
@@ -1245,9 +1273,13 @@ irq_handler:
 	add ah, BUF_RENDER_1 - 1	; Target render buffer: playing part - 1
 	jmp .render_buffer
 
+	align 4
+
 .ack_sbpro_init_irq:
 	mov byte [state(sbpro_init)], 0
 	jmp .exit
+
+	align 4
 
 .reset_buffer:
 
@@ -1288,6 +1320,8 @@ irq_handler:
 	pop ecx
 	pop eax
 	iret
+
+	align 4
 
 .prev_handler:
 	pop ds
