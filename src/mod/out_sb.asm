@@ -610,6 +610,7 @@ play:
 
 	; Pre-render into output buffer before starting playback
 
+	mov byte [state(buffer_pending)], BUF_READY
 	mov byte [state(buffer_status)], BUF_RENDER_1
 	call render
 	mov byte [state(buffer_status)], BUF_RENDER_2
@@ -1091,17 +1092,14 @@ render:
 
 	mov [state(play_sam_int)], bx	; Update samples until playroutine tick
 
-	; A buffer part got empty while rendering, keep state
-
-	cmp byte [state(buffer_status)], BUF_RENDERING
-	jne .exit
-
 .noop:
 
 	; Done rendering or nothing to do (no part of the buffer needs new audio
 	; data)
 
-	mov byte [state(buffer_status)], BUF_READY
+	mov al, BUF_READY
+	xchg al, [state(buffer_pending)]
+	mov [state(buffer_status)], al
 
 .exit:
 	retn
@@ -1317,8 +1315,6 @@ irq_handler:
 
 	cmp byte [state(buffer_status)], BUF_READY
 	jne .exit
-
-.render_pending:
 	mov byte [state(buffer_status)], ah
 
 .exit:
@@ -1329,6 +1325,11 @@ irq_handler:
 	iret
 
 	align 4
+
+.render_pending:
+	mov byte [state(buffer_pending)], ah
+
+	align 4				; Already aligned, but just in case...
 
 .prev_handler:
 	pop ds

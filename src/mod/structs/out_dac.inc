@@ -27,6 +27,7 @@ struc	mod_out_dac_state
 .buffer_pos	resd 1			; Buffer playback position
 .buffer_playprt	resb 1			; Which of the double buffers is playing
 .buffer_status	resb 1			; Flag to indicate need for rendering
+.buffer_pending	resb 1			; Pending render into buffer
 .dev_type	resb 1			; Output DAC device type
 .output_format	resb 1			; Output bitstream format
 .lpt_prn_ctrl	resb 1			; Old LPT printer controls byte value
