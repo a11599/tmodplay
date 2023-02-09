@@ -760,6 +760,11 @@ render:
 
 	mov [state(play_sam_int)], bx	; Update samples until playroutine tick
 
+	; A buffer part got empty while rendering, keep state
+
+	cmp byte [state(buffer_status)], BUF_RENDERING
+	jne .exit
+
 .noop:
 
 	; Done rendering or nothing to do (no part of the buffer needs new audio
@@ -1196,7 +1201,7 @@ toggle_buffer_render:
 	; -> AH: new buffer status
 
 	cmp byte [state(buffer_status)], BUF_RENDERING
-	je .exit
+	je .render_pending
 
 	; Render into update pending buffer part
 
@@ -1218,6 +1223,8 @@ toggle_buffer_render:
 
 	cmp byte [state(buffer_status)], BUF_READY
 	jne .exit
+
+.render_pending:
 	mov byte [state(buffer_status)], ah
 
 .exit:
