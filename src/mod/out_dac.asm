@@ -2,7 +2,7 @@
 ; MOD player - DAC output device
 ;------------------------------------------------------------------------------
 ; Supports via software wavetable rendering:
-; - PC speaker: 5.3 - 7.2-bits, up to 29000 Hz sample rate
+; - PC speaker: 5.3 - 6-bits, up to 29000 Hz sample rate
 ;   (resolution inversely proportional to sample rate)
 ; - Parallel port DACs (aka. Covox): 8-bits, up to 100000 Hz sample rate:
 ;   - Mono LPT DAC on any parallel port
@@ -125,7 +125,7 @@ setup:
 	jmp .save_config
 
 .check_sample_rate_max_speaker:
-	cmp edx, 29000			; Limit maximum to 44 kHz for PC speaker
+	cmp edx, 29000			; Limit maximum to 29 kHz for PC speaker
 	jbe .save_config		; Higher values would reduce bitdepth
 	mov edx, 29000			; too much
 
@@ -235,6 +235,9 @@ setup:
 
 	xor bx, bx			; BX: sample (0 - 255)
 	mov cx, [state(pit_rate)]	; CX: timer IRQ PIT rate (always 8-bit)
+	cmp cx, 64
+	jbe .speakertab_loop
+	mov cx, 64
 
 .speakertab_loop:
 	mov al, bl
