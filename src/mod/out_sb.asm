@@ -1314,8 +1314,8 @@ irq_handler:
 	call render			; Render audio into output buffer
 	cli				; Disable interrupts
 	pop ebp
-	pop esi
 	pop edi
+	pop esi
 	pop ebx
 	pop ax
 
