@@ -9,17 +9,25 @@
 ;   - 8-bit stereo, up to 22050 Hz sample rate
 ; - Sound Blaster 16: 16-bit stereo, up to 44100 Hz sample rate
 ;------------------------------------------------------------------------------
-; 86Box performance with Sound Blaster 16, 1x amplification, 20 msec buffer:
+; 86Box performance with 1x amplification, 20 msec buffer:
 ;
 ; Channels   Samplerate   Stereo mode   Interpolation   CPU
 ;     4        44100 Hz   Mono          Linear          386dx/16
 ;     4        44100 Hz   Cross         Nearest         386dx/16
+;     4        42000 Hz   Real          Nearest         386dx/16
+;     4        29000 Hz   Real          Linear          386dx/16
 ;     4        44100 Hz   Real          Nearest         386dx/20
+;     4        38000 Hz   Real          Linear          386dx/20
+;     8        29000 Hz   Mono          Linear          386dx/20
 ;     8        44100 Hz   Hard          Nearest         386dx/20
 ;     4        44100 Hz   Real          Linear          386dx/25
 ;     8        44100 Hz   Real          Nearest         386dx/33
 ;     8        44100 Hz   Hard          Linear          386dx/33
+;     8        33000 Hz   Real          Linear          386dx/33
+;    14        44100 Hz   Hard          Nearest         386dx/33
 ;     8        44100 Hz   Cross         Linear          386dx/40
+;     8        40000 Hz   Real          Linear          386dx/40
+;    14        38000 Hz   Cross         Nearest         386dx/40
 ;     8        44100 Hz   Real          Linear          486dlc/33
 ;    28        44100 Hz   Hard          Linear          486dx2/66
 ;    28        28000 Hz   Real          Linear          486dx2/66
