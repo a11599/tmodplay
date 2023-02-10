@@ -28,6 +28,7 @@ struc		mod_out_sb_state
 .time_constant	resb 1			; Time constant value
 .sbpro_filter	resb 1			; Output filter state for SB Pro
 .sbpro_init	resb 1			; Flag for SB Pro stereo fix init stage
+.playing	resb 1			; Flag for playback ongoing
 .strucsize:
 
 endstruc

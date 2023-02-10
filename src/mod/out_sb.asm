@@ -607,6 +607,7 @@ play:
 	mov byte [state(buffer_playprt)], 0
 	mov word [state(play_sam_int)], 0
 	mov word [state(play_sam_fr)], 0
+	mov byte [state(playing)], 1
 
 	; Pre-render into output buffer before starting playback
 
@@ -842,6 +843,8 @@ play:
 	align 4
 
 stop:
+	mov byte [state(playing)], 0
+
 	push eax
 	push bx
 	push cx
@@ -1020,6 +1023,8 @@ render:
 	cmp al, BUF_RENDERING
 	je .exit			; BUF_RENDERING: already rendering audio
 	jb .noop			; BUF_READY: nothing to render
+	cmp byte [state(playing)], 1	; Not playing, don't render
+	jne .exit
 
 	; Initialize state
 
@@ -1222,6 +1227,8 @@ irq_handler:
 	je .ack_sb16
 	cmp byte [state(dev_type)], MOD_SB_1
 	jne .ack_sb2
+	cmp byte [state(playing)], 1	; Pre-SB 2.0, but playback stopped,
+	jne .ack_sb2			; don't restart, just ACK IRQ
 
 	; Start transfer of next block on Sound Blaster pre-2.0 and acknowledge
 	; IRQ
