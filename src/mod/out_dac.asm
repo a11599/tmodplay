@@ -568,6 +568,7 @@ stop:
 
 	sti
 
+	clc
 	pop es
 	pop dx
 	pop cx

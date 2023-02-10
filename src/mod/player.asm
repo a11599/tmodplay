@@ -572,13 +572,16 @@ mod_set_stereo_mode:
 global mod_play
 mod_play:
 	push ds
+	push bx
 
-	push es
-	pop ds				; DS: player instance segment
+	mov bx, es
+	mov ds, bx				; DS: player instance segment
 
 	; Don't start again if already playing
 
-	cmp byte [mod.state], STATE_STOP
+	mov bl, STATE_PLAY
+	xchg bl, byte [mod.state]
+	cmp bl, STATE_STOP
 	je .start
 	mov eax, MOD_ERR_PLAYING
 	stc
@@ -590,14 +593,14 @@ mod_play:
 
 	call mod_playroutine_reset
 	call [out_fn(play)]
-	jc .exit
+	jnc .exit
 
-	; Set internal state to playing
+	; Couldn't start playback
 
-	mov byte [mod.state], STATE_PLAY
-	clc
+	mov byte [mod.state], STATE_STOP
 
 .exit:
+	pop bx
 	pop ds
 	retf
 
@@ -615,26 +618,29 @@ mod_play:
 global mod_stop
 mod_stop:
 	push ds
+	push bx
 
-	push es
-	pop ds				; DS: player instance segment
+	mov bx, es
+	mov ds, bx			; DS: player instance segment
 
 	; Don't stop again if not playing
 
-	cmp byte [mod.state], STATE_STOP
+	mov bl, STATE_STOP
+	xchg bl, byte [mod.state]
+	cmp bl, STATE_STOP
 	je .exit
 
 	; Stop output device
 
 	call [out_fn(stop)]
-	jc .exit
+	jnc .exit
 
-	; Set internal state to stopped
+	; Couldn't stop playback (this should not happen)
 
-	mov byte [mod.state], STATE_STOP
+	mov byte [mod.state], STATE_PLAY
 
 .exit:
-	clc
+	pop bx
 	pop ds
 	retf
 

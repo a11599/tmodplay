@@ -907,6 +907,7 @@ stop:
 
 	sti
 
+	clc
 	pop es
 	pop cx
 	pop bx
