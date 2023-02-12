@@ -244,6 +244,9 @@ mod_swt_set_interpolation:
 	mov cs:[render_direct_store_fn_addr], cx
 	mov cs:[render_mix_fn_addr], bx
 	mov cs:[render_direct_mix_fn_addr], bx
+	add bx, RENDER_MIX_FN_LAST
+	mov cs:[render_mix_fn_last_addr], bx
+	mov cs:[render_direct_mix_fn_last_addr], bx
 
 	pop cx
 	pop bx
@@ -1071,6 +1074,8 @@ mod_swt_set_mixer:
 %%stop_sample:
 	%if (%1 = RENDER_STORE)
 
+	; Erase rest of buffer
+
 	mov ecx, ebp
 	shr ecx, 16
 	inc cx
@@ -1081,6 +1086,16 @@ mod_swt_set_mixer:
 	mov es, ax
 	xor eax, eax
 	a32 rep stosd
+
+	%endif
+
+	%if (%3 = RENDER_PAN_X)
+
+	; Apply cross-fade on rest of buffer for RENDER_PAN_X if no sample is
+	; being played in the channel (or the sample ends before the end of the
+	; render buffer).
+
+	jmp %%stop_pan_x
 
 	%endif
 
@@ -1143,7 +1158,11 @@ mod_swt_set_mixer:
 	movsx cx, ah			; CX: Next 8-bit sample (sign-extend)
 	movsx ax, al			; AX: Current 8-bit sample (sign-extend)
 	sub cx, ax			; CX: Difference between samples (9-bit)
+	%if (%3 = RENDER_PAN_X)
+	and ecx, 0x01ff			; Crossfade mixer destroys ECX high word
+	%else
 	and cx, 0x01ff
+	%endif
 	or ch, bl			; ECX: merge interpolation index
 	add ax, gs:[ecx * 2]		; Add interpolated difference
 	mov bl, al			; Use interpolated sample value
@@ -1162,15 +1181,23 @@ mod_swt_set_mixer:
 	%elif (%3 = RENDER_PAN_X)
 
 	; Fixed panning with crossfade: store/mix 75% of rendered sample to
-	; panned channel
+	; panned channel. This is only used for the last channel, the rest is
+	; mixed with hard pan. It is much faster that way, the cross-mixing is
+	; done here, in the last channel. However, care must be taken to process
+	; the rest of the buffer if nothing is playing in the last channel or
+	; the sample ends before the end of buffer.
 
 	movsx eax, word fs:[ebx * 2]
-	store_sample %1, sample_idx, eax
-	mov edx, eax
-	add edx, 2
-	sar edx, 2
-	sub eax, edx
-	store_sample %1, pan_idx, eax
+	add eax, [edi + sample_idx]	; EAX: ch1 hard pan sample
+	mov edx, [edi + pan_idx]	; EDX: ch2 hard pan sample
+	lea ecx, [edx * 2 + edx]
+	sar ecx, 2			; ECX: .75 * ch2 hard pan sample
+	add ecx, eax			; ECX: ch1 + .75 * ch2 cross-mixed
+	mov [edi + sample_idx], ecx	; ch1: ch1 + .75 * ch2 cross-mixed
+	lea ecx, [eax * 2 + eax]
+	sar ecx, 2			; ECX: .75 * ch1 hard pan sample
+	add ecx, edx			; ECX: ch2 + .75 * ch1 cross-mixed
+	mov [edi + pan_idx], ecx	; ch2: ch2 + .75 * ch1 cross-mixed
 
 	%elif (%3 = RENDER_PAN_REAL)
 
@@ -1232,6 +1259,71 @@ mod_swt_set_mixer:
 	dw %%render_cnt_ %+ rendercnt
 	%assign rendercnt rendercnt + 1
 	%endrep
+
+	%if (%3 = RENDER_PAN_X)
+
+%%stop_pan_x:
+
+	; Crossfade rest of buffer when no sample is playing in the last channel
+	; or the sample ends before the end of the render buffer.
+
+	shr ebp, 16
+	inc bp				; BP: number of samples left in buffer
+	mov bx, bp
+	jz %%done
+	shr bp, 4			; BP: number of samples / 16
+	jz %%pan_x_rest
+
+%%pan_x_loop:
+
+	; Unrolled cross-fade mixer loop, process 16 samples at once for better
+	; performance.
+
+	%assign idx 0
+	%rep 16
+
+	mov eax, [edi + sample_idx + idx]
+	mov edx, [edi + pan_idx + idx]
+	lea ecx, [edx * 2 + edx]
+	sar ecx, 2
+	add ecx, eax
+	mov [edi + sample_idx + idx], ecx
+	lea ecx, [eax * 2 + eax]
+	sar ecx, 2
+	add ecx, edx
+	mov [edi + pan_idx + idx], ecx
+
+	%assign idx idx + 8
+	%endrep
+
+	add edi, 8 * 16
+	dec bp
+	jnz %%pan_x_loop
+
+%%pan_x_rest:
+	and bl, 0x0f			; BL: rest of samples in render buffer
+	jz %%done
+
+	; Crossfade the rest of samples (up to 15) left after the unrolled loop
+
+%%pan_x_loop_rest:
+	mov eax, [edi + sample_idx]
+	mov edx, [edi + pan_idx]
+	lea ecx, [edx * 2 + edx]
+	sar ecx, 2
+	add ecx, eax
+	mov [edi + sample_idx], ecx
+	lea ecx, [eax * 2 + eax]
+	sar ecx, 2
+	add ecx, edx
+	mov [edi + pan_idx], ecx
+
+	add edi, 8
+	dec bl
+	jnz %%pan_x_loop_rest
+	jmp %%done
+
+	%endif
 
 %endmacro
 
@@ -1476,16 +1568,8 @@ render_right_mix:
 	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
 
 	align 4
-render_leftx_store:
-	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_NN, 0
-
-	align 4
 render_leftx_mix:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_NN, 0
-
-	align 4
-render_rightx_store:
-	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_NN, 0
 
 	align 4
 render_rightx_mix:
@@ -1518,16 +1602,8 @@ render_right_mix_lin:
 	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_right_mix
 
 	align 4
-render_leftx_store_lin:
-	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_LIN, render_leftx_store
-
-	align 4
 render_leftx_mix_lin:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_LIN, render_leftx_mix
-
-	align 4
-render_rightx_store_lin:
-	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_LIN, render_rightx_store
 
 	align 4
 render_rightx_mix_lin:
@@ -1605,7 +1681,9 @@ mod_swt_render:
 
 	add di, channel.strucsize
 	dec al
-	jz .exit_render
+	jz .exit_render			; Single-channel, stop rendering
+	dec al
+	jz .last_channel		; Two channels, skip middle channels
 
 	; Render additional channels (add rendered samples)
 
@@ -1633,6 +1711,19 @@ mod_swt_render:
 	add di, channel.strucsize
 	dec al
 	jnz .loop_channels
+
+	; Render last channel (add rendered samples and cross-fade if needed)
+
+.last_channel:
+	inc si
+
+	push ebx
+
+	movzx si, byte cs:[edx + esi]
+	call [cs:render_mix_fn + si]
+	render_mix_fn_last_addr EQU $ - 2
+
+	pop ebx
 
 .exit_render:
 	pop edi
@@ -1715,7 +1806,9 @@ mod_swt_render_direct:
 
 	add di, channel.strucsize
 	dec al
-	jz .exit_render
+	jz .exit_render			; Single-channel, stop rendering
+	dec al
+	jz .last_channel		; Two channels, skip middle channels
 
 	; Render additional channels (add rendered samples)
 
@@ -1743,6 +1836,15 @@ mod_swt_render_direct:
 	add di, channel.strucsize
 	dec al
 	jnz .loop_channels
+
+	; Render last channel (add rendered samples and cross-fade)
+
+.last_channel:
+	inc si
+
+	movzx si, byte cs:[edx + esi]
+	call [cs:render_mix_fn + si]
+	render_direct_mix_fn_last_addr EQU $ - 2
 
 .exit_render:
 	pop edi
@@ -1777,13 +1879,20 @@ out_convert_fn	dw out_8bit_mono_signed
 
 render_store_fn	dw render_left_store
 		dw render_right_store
-		dw render_leftx_store
-		dw render_rightx_store
+		dw render_left_store
+		dw render_right_store
 		dw render_stereo_store
 
 render_mix_fn	dw render_left_mix
 		dw render_right_mix
-		dw render_leftx_mix
+		dw render_left_mix
+		dw render_right_mix
+		dw render_stereo_mix
+		RENDER_MIX_FN_LAST EQU $ - render_mix_fn
+
+		dw render_left_mix	; Mixing functions for last channel
+		dw render_right_mix
+		dw render_leftx_mix	; Crossfade is mixed differently
 		dw render_rightx_mix
 		dw render_stereo_mix
 
@@ -1791,13 +1900,19 @@ render_mix_fn	dw render_left_mix
 
 renlin_store_fn	dw render_left_store_lin
 		dw render_right_store_lin
-		dw render_leftx_store_lin
-		dw render_rightx_store_lin
+		dw render_left_store_lin
+		dw render_right_store_lin
 		dw render_stereo_store_lin
 
 renlin_mix_fn	dw render_left_mix_lin
 		dw render_right_mix_lin
-		dw render_leftx_mix_lin
+		dw render_left_mix_lin
+		dw render_right_mix_lin
+		dw render_stereo_mix_lin
+
+		dw render_left_mix_lin	; Mixing functions for last channel
+		dw render_right_mix_lin
+		dw render_leftx_mix_lin	; Crossfade is mixed differently
 		dw render_rightx_mix_lin
 		dw render_stereo_mix_lin
 
@@ -1815,12 +1930,12 @@ monotab:	; MOD_PAN_MONO: Mix everything to left channel
 		%endrep
 
 hardpantab:	; MOD_PAN_HARD: Left - Right - Right - Left
-		%rep (MOD_MAX_CHANS / 4)
+		%rep ((MOD_MAX_CHANS + 3) / 4)
 		db 0, 2, 2, 0
 		%endrep
 
 xpantab:	; MOD_PAN_CROSS: Left - Right - Right - Left
-		%rep (MOD_MAX_CHANS / 4)
+		%rep ((MOD_MAX_CHANS + 3) / 4)
 		db 4, 6, 6, 4
 		%endrep
 
