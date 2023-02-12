@@ -21,10 +21,8 @@ struc		channel
 .pan		resb 1			; Panning (0 - 255)
 .left_volume	resb 1			; Left channel volume (0 - 64)
 .left_bitshift	resb 1			; Left channel bitshift (0 - 5)
-.left_round	resb 1			; Left channel bitshift rounding corr.
 .right_volume	resb 1			; Right channel volume (0 - 64)
 .right_bitshift	resb 1			; Right channel bitshift (0 - 5)
-.right_round	resb 1			; Right channel bitshift rounding corr.
 		alignb 4
 .strucsize:
 

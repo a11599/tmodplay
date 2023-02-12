@@ -786,20 +786,10 @@ mod_swt_set_mixer:
 	call .calc_pan_volume
 	mov [di + channel.right_volume], ch
 	mov [di + channel.right_bitshift], cl
-	test cl, cl			; Calculate rounding corr. for bitshift
-	setnz ah			; AH: 1 if there is any bitshift, else 0
-	dec cl
-	shl ah, cl			; AH: 2 ^ (bitshift - 1)
-	mov [di + channel.right_round], ah
 	not bh				; BH: invert pan for left channel
 	call .calc_pan_volume
 	mov [di + channel.left_volume], ch
 	mov [di + channel.left_bitshift], cl
-	test cl, cl			; Calculate rounding corr. for bitshift
-	setnz ah			; AH: 1 if there is any bitshift, else 0
-	dec cl
-	shl ah, cl			; AH: 2 ^ (bitshift - 1)
-	mov [di + channel.left_round], ah
 
 	pop fs
 	pop cx
@@ -988,20 +978,6 @@ mod_swt_set_mixer:
 	%assign repcnt 1
 	%rep UNROLL_COUNT		; Right sample bitshift
 	mov cs:[%%right_bitshift_ %+ repcnt], al
-	%assign repcnt repcnt + 1
-	%endrep
-
-	mov al, [di + channel.left_round]
-	%assign repcnt 1
-	%rep UNROLL_COUNT		; Left sample bitshift rounding corr.
-	mov cs:[%%left_round_ %+ repcnt], al
-	%assign repcnt repcnt + 1
-	%endrep
-
-	mov al, [di + channel.right_round]
-	%assign repcnt 1
-	%rep UNROLL_COUNT		; Right sample bitshift rounding corr.
-	mov cs:[%%right_round_ %+ repcnt], al
 	%assign repcnt repcnt + 1
 	%endrep
 
@@ -1202,16 +1178,12 @@ mod_swt_set_mixer:
 	; and a bitshift operation.
 
 	movsx eax, word fs:[ebx * 2]
-	add eax, 0x12
-	%%left_round_ %+ repcnt EQU $ - 1
-	sar eax, 0x12
+	sar ax, 0x12
 	%%left_bitshift_ %+ repcnt EQU $ - 1
 	store_sample %1, 0, eax
 	mov dl, bl			; DL: sample value for right channel
 	movsx eax, word fs:[edx * 2]
-	add eax, 0x12
-	%%right_round_ %+ repcnt EQU $ - 1
-	sar eax, 0x12
+	sar ax, 0x12
 	%%right_bitshift_ %+ repcnt EQU $ - 1
 	store_sample %1, 4, eax
 
