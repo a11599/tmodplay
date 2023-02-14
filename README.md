@@ -11,7 +11,7 @@ It requires a 386 or above running MS-DOS or Windows 9x/ME in real DOS mode - or
 
 An extremely optimized software wavetable with 16-bit mixing and optional linear interpolation upsampling is included for non-wavetable sound cards (all of them for now, but at least GUS support is planned in the future). Stereo is supported with hard pan or 75% crossfeed. True stereo panning via 8xx and E8x MOD commands is also available.
 
-According to 86Box, this thing should be able to play [dope.mod](https://modarchive.org/index.php?request=view_by_moduleid&query=35344) at 28 kHz in stereo through a Sound Blaster 16 with linear interpolation on a 486 DX2/66.
+According to 86Box, this thing should be able to play [dope.mod](https://modarchive.org/index.php?request=view_by_moduleid&query=35344) at 33 kHz in stereo through a Sound Blaster 16 with linear interpolation on a 486 DX2/66.
 
 The main development platform is a modern PC with DOSBox, but the result is always tested (also some parts are developed) on actual retro hardware:
 

@@ -4,6 +4,21 @@
 ; Implements software mixing up to 32 channels. The aim is to replicate
 ; Gravis Ultrasound-like capabilities in software to the extent required by
 ; MOD playback.
+;------------------------------------------------------------------------------
+; 86Box 386DX clocks used with little output clipping at 44100 Hz samplerate:
+;
+; Stereo mode   Interpolation   MHz per channel for rendering    MHz for mixing
+; -----------   -------------   -----------------------------    --------------
+; Mono          Nearest                                  1.92              1.89
+; Mono          Linear                                   3.56              1.89
+; Hard          Nearest                                  1.96              2.55
+; Hard          Linear                                   3.65              2.55
+; Cross         Nearest                                  1.96              4.67
+; Cross         Linear                                   3.68              4.67
+; Real          Nearest                                  3.17              2.55
+; Real          Linear                                   4.68              2.55
+;
+; Performance scales linearly with sample rate.
 ;==============================================================================
 
 cpu 386

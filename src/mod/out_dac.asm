@@ -12,45 +12,17 @@
 ; All output devices utilize the timer interrupt (IRQ 0) for playback, which
 ; makes it unavailable for other purposes.
 ;------------------------------------------------------------------------------
-; 86Box performance with 1x amplification, 20 msec buffer (PC speaker
-; performance is the same as a mono LPT DAC):
+; Performance same as software wavetable rendering, plus playback overhead due
+; to timer interrupts (86Box 386DX clocks at 44192 Hz):
 ;
-; DAC     Channels   Samplerate   Stereo mode   Interpolation   CPU
-; Mono        4        49716 Hz   -             Nearest         386dx/16
-; Dual        4        44192 Hz   Hard          Nearest         386dx/16
-; Stereo      4        41144 Hz   Hard          Nearest         386dx/16
-; Mono        4        42617 Hz   -             Linear          386dx/20
-; Dual        4        56818 Hz   Hard          Nearest         386dx/20
-; Stereo      4        51878 Hz   Hard          Nearest         386dx/20
-; Dual        4        39773 Hz   Hard          Linear          386dx/20
-; Stereo      4        37287 Hz   Hard          Linear          386dx/20
-; Dual        4        31400 Hz   Real          Linear          386dx/20
-; Stereo      4        29830 Hz   Real          Linear          386dx/20
-; Mono        4        74574 Hz   -             Nearest         386dx/25
-; Mono        4        54236 Hz   -             Linear          386dx/25
-; Dual        4        49716 Hz   Hard          Linear          386dx/25
-; Stereo      4        47727 Hz   Hard          Linear          386dx/25
-; Dual        4        49716 Hz   Real          Nearest         386dx/25
-; Stereo      4        47727 Hz   Real          Nearest         386dx/25
-; Mono        8        49716 Hz   -             Nearest         386dx/25
-; Dual        8        47727 Hz   Hard          Nearest         386dx/25
-; Stereo      8        45892 Hz   Hard          Nearest         386dx/25
-; Dual        4        38490 Hz   Real          Linear          386dx/25
-; Stereo      4        37287 Hz   Real          Linear          386dx/25
-; Mono        4        99432 Hz   -             Nearest         386dx/33
-; Mono        4        70187 Hz   -             Linear          386dx/33
-; Dual        4        91783 Hz   Hard          Nearest         386dx/33
-; Stereo      4        85227 Hz   Hard          Nearest         386dx/33
-; Dual        4        51878 Hz   Real          Linear          386dx/33
-; Stereo      4        49716 Hz   Real          Linear          386dx/33
-; Mono        8        42614 Hz   -             Linear          386dx/33
-; Dual        8        39773 Hz   Real          Nearest         386dx/33
-; Stereo      8        38490 Hz   Real          Nearest         386dx/33
-; Dual        8        41144 Hz   Hard          Linear          386dx/33
-; Stereo      8        39773 Hz   Hard          Linear          386dx/33
-; Mono        8        49716 Hz   -             Linear          386dx/40
-; Dual        8        39773 Hz   Real          Linear          386dx/40
-; Stereo      8        38490 Hz   Real          Linear          386dx/40
+; DAC                        Cross mixing overhead MHz    Playback overhead MHz
+; ---                        -------------------------    ---------------------
+; Speaker/Mono LPT DAC                               -                      6.0
+; Dual LPT DACs in stereo                         2.12                      6.0
+; Stereo LPT DAC in stereo                        2.12                      7.2
+;
+; Cross mixing overhead (2.12 MHz) applies to stereo output with cross stereo
+; mode only.
 ;==============================================================================
 
 cpu 386
