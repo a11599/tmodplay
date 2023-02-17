@@ -687,7 +687,7 @@ free_xmem:
 ;------------------------------------------------------------------------------
 ; Allocate a paragraph-aligned memory block.
 ;------------------------------------------------------------------------------
-; -> AL- Allocation mode (SYS_MEM_*)
+; -> AL - Allocation mode (SYS_MEM_*)
 ;    EBX - Size of memory block in bytes
 ; <- CF - Set if error
 ;    EAX - Linear address of allocated memory or error code if CF is set

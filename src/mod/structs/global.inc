@@ -59,7 +59,7 @@ struc		mod
 .restart_pos	resb 1			; Restart position
 .state		resb 1			; Player status (MOD_STATE_*)
 .sequence	resb 128		; Pattern number for each position
-		alignb 2
+		alignb 4
 .pattern_addr	resd 256		; Pattern addr rel. to player inst. seg
 .sample_hdr_ofs	resw 31			; Offsets of sample header data
 		alignb 4		; Sample header data
