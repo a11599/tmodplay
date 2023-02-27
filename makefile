@@ -3,6 +3,7 @@
 debugobjs = obj\debug\log.obj
 sysobjs = obj\system\dma.obj obj\system\env.obj obj\system\file.obj obj\system\memory.obj obj\system\pic.obj obj\system\pit.obj obj\system\string.obj
 modobjs = obj\mod\convert.obj obj\mod\loader.obj obj\mod\out_dac.obj obj\mod\out_none.obj obj\mod\out_sb.obj obj\mod\player.obj obj\mod\routine.obj obj\mod\wtbl_sw.obj
+guiobjs = obj\gui\setup.obj obj\gui\draw.obj
 appobjs = obj\tmodplay.obj
 
 # Compiler options
@@ -39,7 +40,7 @@ distclean: .SYMBOLIC
 
 # Binary build and link
 
-$(dest).exe: obj $(debugobjs) $(sysobjs) $(modobjs) $(appobjs)
+$(dest).exe: obj $(debugobjs) $(sysobjs) $(modobjs) $(guiobjs) $(appobjs)
 	if not exist dist mkdir dist
 	%write obj\tmodplay.lnk NAME $(dest)
 	%write obj\tmodplay.lnk OPTION dosseg
@@ -50,15 +51,18 @@ $(dest).exe: obj $(debugobjs) $(sysobjs) $(modobjs) $(appobjs)
 	%write obj\tmodplay.lnk FILE {$(debugobjs)}
 	%write obj\tmodplay.lnk FILE {$(sysobjs)}
 	%write obj\tmodplay.lnk FILE {$(modobjs)}
+	%write obj\tmodplay.lnk FILE {$(guiobjs)}
 	%write obj\tmodplay.lnk FILE {$(appobjs)}
 	$(wlink) @obj\tmodplay.lnk
 
 # Create obj directory for .obj files
 
 obj: .SYMBOLIC .ALWAYS
+	if not exist obj mkdir obj
 	if not exist obj\debug mkdir obj\debug
-	if not exist obj\mod mkdir obj\mod
 	if not exist obj\system mkdir obj\system
+	if not exist obj\mod mkdir obj\mod
+	if not exist obj\gui mkdir obj\gui
 
 # .inc file dependencies
 
@@ -94,6 +98,11 @@ src\mod\structs\wtbl_sw.inc: &
 	src\mod\consts\global.inc
 
 	wtouch src\mod\structs\wtbl_sw.inc
+
+src\gui\api\public.inc: &
+	src\gui\consts\public.inc
+
+	wtouch src\gui\api\public.inc
 
 src\system\api\dma.inc: &
 	src\system\consts\public.inc
@@ -255,12 +264,26 @@ obj\system\string.obj: src\system\string.asm &
 
 	$(nasm) $(nasmopts) $[@ -o $^@
 
+obj\gui\setup.obj: src\gui\setup.asm &
+	src\gui\consts\public.inc &
+	src\debug\log.inc
+
+	$(nasm) $(nasmopts) $[@ -o $^@
+
+obj\gui\draw.obj: src\gui\draw.asm &
+	src\gui\api\setup.inc &
+	src\gui\consts\global.inc &
+	src\debug\log.inc
+
+	$(nasm) $(nasmopts) $[@ -o $^@
+
 obj\tmodplay.obj: src\tmodplay.asm &
 	src\system\api\memory.inc &
 	src\system\api\file.inc &
 	src\system\api\env.inc &
 	src\system\api\string.inc &
 	src\mod\api\player.inc &
+	src\gui\api\public.inc &
 	src\debug\log.inc
 
 	$(nasm) $(nasmopts) $[@ -o $^@

@@ -20,3 +20,6 @@ extern mod_play
 extern mod_stop
 extern mod_render
 extern mod_sb_detect
+extern mod_get_info
+extern mod_get_channel_info
+extern mod_get_output_info

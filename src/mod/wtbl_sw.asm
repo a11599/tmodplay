@@ -883,6 +883,44 @@ mod_swt_set_mixer:
 
 
 ;------------------------------------------------------------------------------
+; Add mixer information to mod_channel_info structure.
+;------------------------------------------------------------------------------
+; -> DS - Player instance segment
+; -> ES:EDI - Pointer to buffer receiving mod_channel_info structures
+; <- ES:EDI - Filled with data
+;------------------------------------------------------------------------------
+
+	align 4
+
+global mod_swt_get_mixer_info
+mod_swt_get_mixer_info:
+	push eax
+	push bx
+	push si
+	push edi
+
+	mov bl, [mod.num_channels]
+	mov si, state(channels)
+
+.loop_channel:
+	mov eax, [si + channel.sample_pos_int]
+	mov es:[edi + mod_channel_info.sample_pos_int], eax
+	mov ax, [si + channel.sample_pos_fr]
+	mov es:[edi + mod_channel_info.sample_pos_fr], ax
+
+	add si, channel.strucsize
+	add edi, mod_channel_info.strucsize
+	dec bl
+	jnz .loop_channel
+
+	pop edi
+	pop si
+	pop bx
+	pop eax
+	retn
+
+
+;------------------------------------------------------------------------------
 ; Macro to render samples for a channel.
 ;------------------------------------------------------------------------------
 ; -> CX - Number of samples to render
@@ -1167,9 +1205,9 @@ mod_swt_set_mixer:
 
 	mov ax, bp			; Calculate interpolation index
 	shr ax, (7 - LIN_IPOL_EXP)
-	and ax, 0xfe00
-	mov bl, ah			; BL: interpolation index
+	mov bl, ah
 	mov ax, [esi]			; Get current and next 8-bit samples
+	and bl, 0xfe			; BL: interpolation index
 	movsx cx, ah			; CX: Next 8-bit sample (sign-extend)
 	movsx ax, al			; AX: Current 8-bit sample (sign-extend)
 	sub cx, ax			; CX: Difference between samples (9-bit)
@@ -1190,8 +1228,8 @@ mod_swt_set_mixer:
 	; channel
 
 	movsx eax, word fs:[ebx * 2]
-	store_sample %1, sample_idx, eax
 	store_sample %1, pan_idx, 0
+	store_sample %1, sample_idx, eax
 
 	%elif (%3 = RENDER_PAN_X)
 
@@ -1203,8 +1241,8 @@ mod_swt_set_mixer:
 	; the sample ends before the end of buffer.
 
 	movsx eax, word fs:[ebx * 2]
-	add eax, [edi + sample_idx]	; EAX: ch1 hard pan sample
 	mov edx, [edi + pan_idx]	; EDX: ch2 hard pan sample
+	add eax, [edi + sample_idx]	; EAX: ch1 hard pan sample
 	lea ecx, [edx * 2 + edx]
 	sar ecx, 2			; ECX: .75 * ch2 hard pan sample
 	add ecx, eax			; ECX: ch1 + .75 * ch2 cross-mixed
@@ -1222,8 +1260,8 @@ mod_swt_set_mixer:
 	movsx eax, word fs:[ebx * 2]
 	sar ax, 0x12
 	%%left_bitshift_ %+ repcnt EQU $ - 1
-	store_sample %1, 0, eax
 	mov dl, bl			; DL: sample value for right channel
+	store_sample %1, 0, eax
 	movsx eax, word fs:[edx * 2]
 	sar ax, 0x12
 	%%right_bitshift_ %+ repcnt EQU $ - 1

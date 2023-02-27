@@ -697,6 +697,197 @@ mod_render:
 	retf
 
 
+;------------------------------------------------------------------------------
+; Copies data from mod structure into mod_info structure.
+;------------------------------------------------------------------------------
+; -> DS - Player instance segment
+;    ES:EDI - Pointer to mod_info structure
+;    %1 - Structure member to copy
+;    %2 - Temporary register used to copy data
+; <- %2 - Contains structure member value
+;------------------------------------------------------------------------------
+
+%macro	copy_mod_info 2
+
+	mov %2, [mod.%1]
+	mov es:[edi + mod_info.%1], %2
+
+%endmacro
+
+
+;------------------------------------------------------------------------------
+; Copies data from mod_sample structure into mod_sample_info structure.
+;------------------------------------------------------------------------------
+; -> DS:ESI - Pointer to mod_sample structure
+;    ES:EDI - Pointer to mod_sample_info structure
+;    %1 - Structure member to copy
+;    %2 - Temporary register used to copy data
+; <- %2 - Contains structure member value
+;------------------------------------------------------------------------------
+
+%macro	copy_sample_info 2
+
+	mov %2, [si + mod_sample.%1]
+	mov es:[edi + mod_sample_info.%1], %2
+
+%endmacro
+
+
+;------------------------------------------------------------------------------
+; Returns a memory buffer filled with MOD information.
+;------------------------------------------------------------------------------
+; -> AL - Memory allocation mode (SYS_MEM_*)
+;    ES - Player instance segment
+; <- CF - Set if error
+;    EAX - Linear address of mod_info structure or error code if CF set
+;------------------------------------------------------------------------------
+
+	align 4
+
+global mod_get_info
+mod_get_info:
+	push ebx
+	push cx
+	push edx
+	push esi
+	push edi
+	push ds
+	push es
+
+	; Setup segment registers and allocate memory for mod_info structure
+
+	mov bx, es
+	mov ds, bx			; DS: player instance segment
+	xor bx, bx
+	mov es, bx			; ES: zeropage
+
+	movzx ebx, byte [mod.num_samples]
+	imul bx, mod_sample_info.strucsize
+	add bx, mod_info.strucsize	; EBX: memory needed for mod_info
+	call far sys_mem_alloc
+	jc .exit
+	mov edx, eax			; EDX: mod_info linear address
+
+	log {'Allocated {u} bytes for MOD info structure @{X32}', 13, 10}, ebx, edx
+
+	; Copy header info
+
+	mov esi, mod.title		; Title
+	mov cx, 21
+	lea edi, [edx + mod_info.title]
+	a32 rep movsb
+
+	mov edi, eax
+	copy_mod_info num_channels, al	; Number of samples
+	copy_mod_info num_samples, al	; Number of channels
+	copy_mod_info length, al	; Song length
+	copy_mod_info num_patterns, al	; Number of patterns
+	copy_mod_info restart_pos, al	; Restart position
+	copy_mod_info flags, eax	; MOD flags
+
+	mov bx, es			; Linear address of pattern data
+	movzx eax, bx
+	shl eax, 4
+	add eax, [mod.pattern_addr]
+	mov es:[edi + mod_info.pattern_addr], eax
+
+	; Copy sample info
+
+	mov bl, [mod.num_samples]
+	mov esi, mod.sample_hdr
+	lea edi, [edx + mod_info.samples]
+
+.sample_info_loop:
+	mov cx, 23			; Sample name
+	a32 rep movsb
+	sub si, 23
+	sub edi, 23
+
+	copy_sample_info addr, eax	; Linear address
+	copy_sample_info length, eax	; Length
+	copy_sample_info rpt_start, eax	; Repeat start
+	copy_sample_info rpt_len, eax	; Repeat length
+
+	add esi, mod_sample.strucsize
+	add edi, mod_sample_info.strucsize
+	dec bl
+	jnz .sample_info_loop
+
+	mov eax, edx
+	clc
+
+.exit:
+	pop es
+	pop ds
+	pop edi
+	pop esi
+	pop edx
+	pop cx
+	pop ebx
+	retf
+
+
+;------------------------------------------------------------------------------
+; Return information about channels.
+;------------------------------------------------------------------------------
+; -> DS:ESI - Pointer to buffer receiving mod_channel_info structures
+;    ES - Player instance segment
+; <- DS:ESI - Filled with data
+;------------------------------------------------------------------------------
+
+	align 4
+
+global mod_get_channel_info
+mod_get_channel_info:
+	push edi
+	push ds
+	push es
+
+	push ds
+	push es
+	pop ds				; DS: player instance segment
+	pop es
+	mov edi, esi			; ES:EDI: mod_channel_info buffer
+
+	call mod_playroutine_get_channel_info
+	call [out_fn(get_mixer_info)]
+
+	pop es
+	pop ds
+	pop edi
+	retf
+
+
+;------------------------------------------------------------------------------
+; Return information about the output device.
+;------------------------------------------------------------------------------
+; -> DS:ESI - Pointer to buffer receiving mod_output_info structure
+;    ES - Player instance segment
+; <- DS:ESI - Filled with data
+;------------------------------------------------------------------------------
+
+	align 4
+
+global mod_get_output_info
+mod_get_output_info:
+	push edi
+	push ds
+	push es
+
+	push ds
+	push es
+	pop ds				; DS: player instance segment
+	pop es
+	mov edi, esi			; ES:EDI: mod_output_info buffer
+
+	call [out_fn(get_info)]
+
+	pop es
+	pop ds
+	pop edi
+	retf
+
+
 ;==============================================================================
 ; Data area
 ;==============================================================================

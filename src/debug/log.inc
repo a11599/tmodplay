@@ -245,3 +245,37 @@ extern log_shutdown
 
 	%endif
 %endmacro
+
+
+;------------------------------------------------------------------------------
+; VGA frametime visualizer.
+;------------------------------------------------------------------------------
+; Sets the color of a palette entry to a specific RGB code.
+; -> %1 - VGA palette entry
+;    %2 - Red component (0 - 63)
+;    %3 - Green component (0 - 63)
+;    %4 - Blue component (0 - 63)
+;------------------------------------------------------------------------------
+
+%macro	logframe 4
+	%ifdef __DEBUG__
+
+	push ax
+	push dx
+
+	mov al, %1
+	mov dx, 0x3c8
+	out dx, al
+	inc dx
+	mov al, %2
+	out dx, al
+	mov al, %3
+	out dx, al
+	mov al, %4
+	out dx, al
+
+	pop dx
+	pop ax
+
+	%endif
+%endmacro

@@ -1,9 +1,9 @@
 ;==============================================================================
-; MOD player - play routine
+; MOD player GUI
 ;------------------------------------------------------------------------------
-; API
+; Public constants
 ;==============================================================================
 
-extern mod_playroutine_reset
-extern mod_playroutine_tick
-extern mod_playroutine_get_channel_info
+; Error codes
+
+VID_ERR_NOVGA	EQU -1			; No supported graphical mode available

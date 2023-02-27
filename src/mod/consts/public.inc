@@ -48,3 +48,19 @@ MOD_PAN_REAL	EQU 3			; Real panning (use effects 8xx and E8x)
 
 MOD_IPOL_NN	EQU 0			; Nearest neighbour interpolation
 MOD_IPOL_LINEAR	EQU 1			; Linear interpolation
+
+; Output buffer formats
+
+MOD_BUF_DEPTH	EQU 0x03		; Bitdepth mask
+MOD_BUF_8BIT	EQU 0x00		; 8-bit output buffer in 8-bit bytes
+MOD_BUF_16BIT	EQU 0x01		; 16-bit output buffer in 16-bit words
+MOD_BUF_1632BIT	EQU 0x02		; 16-bit output buffer in 32-bit words
+
+MOD_BUF_CHANNEL	EQU 0x0C		; Channel mask
+MOD_BUF_1CHN	EQU 0x00		; 1 channel buffer (mono)
+MOD_BUF_2CHN	EQU 0x04		; 2 channel buffer (stereo)
+MOD_BUF_2CHNL	EQU 0x0A		; 2 channel, only left used (mono)
+
+MOD_BUF_RANGE	EQU 0x10		; Value range mask
+MOD_BUF_INT	EQU 0x00		; Signed sample data
+MOD_BUF_UINT	EQU 0x10		; Unsigned sample data

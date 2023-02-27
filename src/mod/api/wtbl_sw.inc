@@ -16,3 +16,4 @@ extern mod_swt_set_sample
 extern mod_swt_set_mixer
 extern mod_swt_render
 extern mod_swt_render_direct
+extern mod_swt_get_mixer_info

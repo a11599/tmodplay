@@ -530,6 +530,48 @@ mod_playroutine_tick:
 
 
 ;------------------------------------------------------------------------------
+; Return information about channels.
+;------------------------------------------------------------------------------
+; -> DS - Player instance segment
+; -> ES:EDI - Pointer to buffer receiving mod_channel_info structures
+; <- ES:EDI - Filled with data
+;------------------------------------------------------------------------------
+
+	align 4
+
+global mod_playroutine_get_channel_info
+mod_playroutine_get_channel_info:
+	push ax
+	push bx
+	push si
+	push edi
+
+	mov bl, [mod.num_channels]
+	mov si, state(channels)
+
+.loop_channel:
+	mov al, [si + channel(sample)]
+	mov es:[edi + mod_channel_info.sample], al
+	mov al, [si + channel(play_volume)]
+	mov es:[edi + mod_channel_info.volume], al
+	mov al, [si + channel(pan)]
+	mov es:[edi + mod_channel_info.pan], al
+	mov ax, [si + channel(play_period)]
+	mov es:[edi + mod_channel_info.period], ax
+
+	add si, mod_routine_channel.strucsize
+	add edi, mod_channel_info.strucsize
+	dec bl
+	jnz .loop_channel
+
+	pop edi
+	pop si
+	pop bx
+	pop ax
+	retn
+
+
+;------------------------------------------------------------------------------
 ; Effects
 ;------------------------------------------------------------------------------
 ; -> DL - Effect command

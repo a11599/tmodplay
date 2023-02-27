@@ -23,7 +23,7 @@ struc		mod_out_sb_state
 .buffer_playprt	resb 1			; Which of the double buffers is playing
 .buffer_status	resb 1			; Flag to indicate need for rendering
 .buffer_pending	resb 1			; Pending render into buffer
-.dev_type	resb 1			; Output DAC device type
+.dev_type	resb 1			; Output Sound Blaster card type
 .output_format	resb 1			; Output bitstream format
 .time_constant	resb 1			; Time constant value
 .sbpro_filter	resb 1			; Output filter state for SB Pro

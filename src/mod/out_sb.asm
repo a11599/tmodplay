@@ -441,14 +441,14 @@ setup:
 
 	; Allocate memory for the output buffer
 
-	mov eax, [state(sample_rate)]	; Convert msec to buffer size
+	mov eax, [state(sample_rate)]	; Convert microsec to buffer size
 	movzx ebx, word [params(buffer_size)]
-	cmp ebx, 1000
-	jae .check_buffer_size
+	cmp ebx, 1000000
+	jae .limit_buffer_size
 	mul ebx
-	mov ebx, 1000
+	mov ebx, 1000000
 	div ebx
-	cmp edx, 500			; Rounding
+	cmp edx, 500000			; Rounding
 	setae dl
 	movzx edx, dl
 	add eax, edx
@@ -456,6 +456,8 @@ setup:
 .check_buffer_size:
 	cmp eax, 5456			; Maximum safe buffer size
 	jbe .use_buffer_size
+
+.limit_buffer_size:
 	mov eax, 5456
 
 .use_buffer_size:
@@ -1096,6 +1098,71 @@ render:
 	retn
 
 
+;------------------------------------------------------------------------------
+; Return information about output device.
+;------------------------------------------------------------------------------
+; -> DS - Player instance segment
+; -> ES:EDI - Pointer to buffer receiving mod_channel_info structures
+; <- ES:EDI - Filled with data
+;------------------------------------------------------------------------------
+
+get_info:
+	push eax
+	push cx
+	push dx
+
+	; Buffer info
+
+	mov eax, [state(sample_rate)]
+	mov es:[edi + mod_output_info.sample_rate], eax
+	mov eax, [state(buffer_addr)]
+	mov es:[edi + mod_output_info.buffer_addr], eax
+	mov eax, [state(buffer_size)]
+	lea eax, [eax + eax * 2]
+	mov es:[edi + mod_output_info.buffer_size], eax
+	mov cl, [state(buffer_playprt)]
+	xor eax, eax
+	cmp cl, 1
+	jb .format			; EAX: 0 (first buffer)
+	mov eax, [state(buffer_size)]
+	je .format			; EAX: 1 * buffer_size (second buffer)
+	add eax, eax			; EAX: 2 * buffer_size (third buffer)
+
+.format:
+	mov es:[edi + mod_output_info.buffer_pos], eax
+
+	; Calculate buffer format
+
+	mov dl, [state(output_format)]
+	xor cx, cx			; CH: buffer format
+	mov dh, dl
+	and dl, FMT_BITDEPTH
+	cmp dl, FMT_16BIT
+	jne .channels
+	or ch, MOD_BUF_16BIT
+
+.channels:
+	mov dl, dh
+	and dl, FMT_CHANNELS
+	cmp dl, FMT_STEREO
+	jne .range
+	or ch, MOD_BUF_2CHN
+
+.range:
+	and dh, FMT_RANGE
+	cmp dh, FMT_UNSIGNED
+	jne .done
+	or ch, MOD_BUF_UINT
+
+.done:
+	mov es:[edi + mod_output_info.buffer_format], ch
+
+	pop dx
+	pop cx
+	pop eax
+	retn
+
+
 ;==============================================================================
 ; Sound Blaster playback functions.
 ;==============================================================================
@@ -1356,6 +1423,8 @@ mod_out_sb_fns	istruc mod_out_fns
 		set_out_fn(set_mixer, set_mixer)
 		set_out_fn(set_sample, mod_swt_set_sample)
 		set_out_fn(render, render)
+		set_out_fn(get_mixer_info, mod_swt_get_mixer_info)
+		set_out_fn(get_info, get_info)
 		iend
 
 silence_sample	db 0x80

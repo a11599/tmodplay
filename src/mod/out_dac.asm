@@ -170,17 +170,23 @@ setup:
 
 	; Allocate memory for the output buffer
 
-	mov eax, [state(sample_rate)]	; Convert msec to buffer size
+	mov eax, [state(sample_rate)]	; Convert microsec to buffer size
 	movzx ebx, word [params(buffer_size)]
-	cmp ebx, 1000
-	jae .check_buffer_size
+	cmp ebx, 1000000
+	jae .limit_buffer_size
 	mul ebx
-	mov ebx, 1000
+	mov ebx, 1000000
 	div ebx
+	cmp edx, 500000			; Rounding
+	setae dl
+	movzx edx, dl
+	add eax, edx
 
 .check_buffer_size:
 	cmp eax, 4096			; Maximum sane buffer size
 	jbe .use_buffer_size
+
+.limit_buffer_size:
 	mov eax, 4096
 
 .use_buffer_size:
@@ -744,6 +750,53 @@ render:
 	retn
 
 
+;------------------------------------------------------------------------------
+; Return information about output device.
+;------------------------------------------------------------------------------
+; -> DS - Player instance segment
+; -> ES:EDI - Pointer to buffer receiving mod_channel_info structures
+; <- ES:EDI - Filled with data
+;------------------------------------------------------------------------------
+
+get_info:
+	push eax
+	push ecx
+
+	; Buffer info
+
+	mov eax, [state(sample_rate)]
+	mov es:[edi + mod_output_info.sample_rate], eax
+	mov eax, [state(buffer_addr)]
+	mov es:[edi + mod_output_info.buffer_addr], eax
+	mov eax, [state(buffer_size)]
+	lea eax, [eax + eax * 2]
+	mov es:[edi + mod_output_info.buffer_size], eax
+	mov eax, [state(buffer_pos)]
+	sub eax, [state(buffer_ofs)]
+	mov es:[edi + mod_output_info.buffer_pos], eax
+
+.format:
+
+	; Calculate buffer format, always 2 channel 16-bit dword unsigned (same
+	; as software wavetable render buffer format), but only left channel
+	; used when output device is mono
+
+	mov cl, [state(output_format)]
+	and cl, FMT_CHANNELS
+	cmp cl, FMT_STEREO
+	je .stereo
+	mov byte es:[edi + mod_output_info.buffer_format], MOD_BUF_1632BIT | MOD_BUF_2CHNL | MOD_BUF_INT
+	jmp .done
+
+.stereo:
+	mov byte es:[edi + mod_output_info.buffer_format], MOD_BUF_1632BIT | MOD_BUF_2CHN | MOD_BUF_INT
+
+.done:
+	pop ecx
+	pop eax
+	retn
+
+
 ;==============================================================================
 ; DAC playback timer interrupt handlers.
 ;==============================================================================
@@ -1257,4 +1310,6 @@ mod_out_dac_fns	istruc mod_out_fns
 		set_out_fn(set_mixer, set_mixer)
 		set_out_fn(set_sample, mod_swt_set_sample)
 		set_out_fn(render, render)
+		set_out_fn(get_mixer_info, mod_swt_get_mixer_info)
+		set_out_fn(get_info, get_info)
 		iend

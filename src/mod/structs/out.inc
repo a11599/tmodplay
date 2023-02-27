@@ -24,6 +24,8 @@ struc	mod_out_fns
 .set_mixer	resw 1			; Set volume, panning and playback speed
 .set_sample	resw 1			; Set sample to be played
 .render		resw 1			; Render audio into the output buffer
+.get_mixer_info	resw 1			; Add mixer info into mod_channel_info
+.get_info	resw 1			; Get output device status info
 		alignb 4
 .strucsize:
 

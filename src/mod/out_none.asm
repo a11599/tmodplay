@@ -384,4 +384,6 @@ mod_out_none_fns:
 		set_out_fn(set_mixer, noop)
 		set_out_fn(set_sample, noop)
 		set_out_fn(render, noop)
+		set_out_fn(get_mixer_info, noop)
+		set_out_fn(get_info, noop)
 		iend
