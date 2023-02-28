@@ -934,23 +934,10 @@ mod_swt_get_mixer_info:
 ;    %2 - Panning balance (RENDER_PAN_L / RENDER_PAN_R)
 ;    %3 - Panning operation (RENDER_PAN_X / RENDER_PAN_HARD / RENDER_PAN_REAL)
 ;    %4 - Interpolation (RENDER_IPOL_NN / RENDER_IPOL_LIN)
-;    %5 - Nearest neighbor channel renderer function when speed >= 1 and
-;         %4 = RENDER_IPOL_LIN
 ; <- Destroys everything except segment registers.
 ;------------------------------------------------------------------------------
 
-%macro	render_channel 5
-
-	mov eax, [di + channel.speed_int]
-
-	%if (%4 = RENDER_IPOL_LIN)
-
-	; Linear upsampling interpolation: use nearest neighbor for downsampling
-
-	test eax,eax
-	jnz %5
-
-	%endif
+%macro	render_channel 4
 
 	push es
 
@@ -984,6 +971,7 @@ mod_swt_get_mixer_info:
 
 	; Setup self-modifying code
 
+	mov eax, [di + channel.speed_int]
 	%assign repcnt 1
 	%rep UNROLL_COUNT		; Playback speed - integer part
 	mov cs:[%%speed_int_ %+ repcnt], eax
@@ -1201,7 +1189,12 @@ mod_swt_get_mixer_info:
 
 	%elif (%4 = RENDER_IPOL_LIN)
 
-	; Linear upsampling interpolation: interpolate between sample points
+	; Linear upsampling interpolation: interpolate between sample points.
+	; When downsampling (ie. playback speed > 1), this routine should
+	; probably take skipped samples into consideration, but there are no
+	; more registers left to do that. It's not a big  problem though and
+	; still sounds a lot better than using nearest neighbor for
+	; downsampling.
 
 	mov ax, bp			; Calculate interpolation index
 	shr ax, (7 - LIN_IPOL_EXP)
@@ -1606,69 +1599,69 @@ out_16bit_stereo_unsigned:
 
 	align 4
 render_left_store:
-	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN
 
 	align 4
 render_left_mix:
-	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN
 
 	align 4
 render_right_store:
-	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
+	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_NN
 
 	align 4
 render_right_mix:
-	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_NN, 0
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_NN
 
 	align 4
 render_leftx_mix:
-	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_NN, 0
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_NN
 
 	align 4
 render_rightx_mix:
-	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_NN, 0
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_NN
 
 	align 4
 render_stereo_store:
-	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN, 0
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN
 
 	align 4
 render_stereo_mix:
-	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN, 0
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN
 
 ; Same for linear interpolation
 
 	align 4
 render_left_store_lin:
-	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_left_store
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_LIN
 
 	align 4
 render_left_mix_lin:
-	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_left_mix
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_LIN
 
 	align 4
 render_right_store_lin:
-	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_right_store
+	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_LIN
 
 	align 4
 render_right_mix_lin:
-	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_LIN, render_right_mix
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_LIN
 
 	align 4
 render_leftx_mix_lin:
-	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_LIN, render_leftx_mix
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_LIN
 
 	align 4
 render_rightx_mix_lin:
-	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_LIN, render_rightx_mix
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_LIN
 
 	align 4
 render_stereo_store_lin:
-	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN, render_stereo_store
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN
 
 	align 4
 render_stereo_mix_lin:
-	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN, render_stereo_mix
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN
 
 
 ;------------------------------------------------------------------------------
