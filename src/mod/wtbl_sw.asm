@@ -584,11 +584,12 @@ mod_swt_upload_sample:
 
 	; Sample repeat -> unroll loop
 
-	add edx, ebx			; DX: repeat end position
+	add edx, ebx			; EDX: repeat end position
 	add edx, eax
 	mov edi, edx			; ES:EDI: sample repeat end position
 	mov esi, ebx			; ES:ESI: sample repeat start position
 	add esi, eax
+	add ebx, eax			; EBX: repeat start position
 	mov cx, UNROLL_SAMPLES
 
 	align 4
