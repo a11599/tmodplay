@@ -293,14 +293,16 @@ mod_sb_detect:
 ;    EAX - Error code if CF set or actual sample rate
 ;    EBX - Number of extra samples that will be generated at the end of each
 ;          sample (must reserve enough space) if no error
+;    ECX - Number of extra samples that will be generated at the beginning of
+;          each sample (must reserve enough space) if no error
 ;------------------------------------------------------------------------------
 
 	align 4
 
 setup:
-	push ecx
 	push edx
 	push ebx
+	push ecx
 
 	; Validate configuration
 
@@ -494,16 +496,16 @@ setup:
 
 	; Done
 
-	add sp, 4			; Discard EBX from stack
+	add sp, 8			; Discard EBX and ECX from stack
 	mov eax, [state(sample_rate)]
 	clc
 
 .exit:
 	pop edx
-	pop ecx
 	retn
 
 .error:
+	pop ecx
 	pop ebx
 	stc
 	jmp .exit

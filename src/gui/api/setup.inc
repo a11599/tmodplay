@@ -5,8 +5,12 @@
 ;==============================================================================
 
 extern gui_plane_chars
+extern gui_rowtab
 extern gui_scr_width
 extern gui_scr_height
+extern gui_buf_addr
+extern gui_buf_rowtab
+extern gui_offscr_addr
 
 
 ;------------------------------------------------------------------------------

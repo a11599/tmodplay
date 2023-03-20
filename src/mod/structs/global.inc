@@ -47,6 +47,7 @@ struc		mod
 		alignb 4
 .instance_addr	resd 1			; Linear address of this structure
 .extra_samples	resd 1			; Number of extra samples for wavetable
+.sample_padding	resd 1			; Number of extra samples at beginning
 		alignb 4		; -------------------------------------
 .file_data:				; File-specific data starts
 .file_handle	resd 1			; File handle after opened

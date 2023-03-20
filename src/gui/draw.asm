@@ -9,6 +9,8 @@ cpu 386
 
 %include "gui/api/setup.inc"
 %include "gui/consts/global.inc"
+%include "gui/consts/public.inc"
+%include "system/api/memory.inc"
 %include "debug/log.inc"
 
 segment gui public use16 class=CODE align=16
@@ -103,11 +105,11 @@ segment gui
 ;------------------------------------------------------------------------------
 ; Draw a filled box to the screen.
 ;------------------------------------------------------------------------------
-; -> SI - X coordinate of top left point in pixels (signed)
-;    DI - Y coordinate of top left point in pixels (signed)
+; -> BX - Height of box in pixels (signed)
 ;    CX - Width of box in pixels (signed)
-;    BX - Height of box in pixels (signed)
 ;    DL - Color of the box (0 - 15)
+;    SI - X coordinate of top left point in pixels (signed)
+;    DI - Y coordinate of top left point in pixels (signed)
 ;------------------------------------------------------------------------------
 ; Coordinates and dimensions are signed and may be negative. A negative
 ; coordinate means the box is shifted upwards and/or left by the negative
@@ -130,6 +132,7 @@ gui_draw_box:
 	push bp
 	push es
 
+	;----------------------------------------------------------------------
 	; Box boundary checks
 
 	cmp bx, 0
@@ -186,13 +189,14 @@ gui_draw_box:
 	set_graph_reg 3, 0		; Ignore latched data, don't rotate
 	set_sequencer_reg 2, 0x0f	; Enable writes to all planes
 
+	xor eax, eax
 	mov ax, di
-	mul word cs:[gui_plane_chars]
-	mov di, ax
+	mov di, cs:[gui_rowtab + eax * 2]
 	mov dx, si			; DX: left start coordinate
 	shr dx, 3
 	add di, dx			; DI: start address in video RAM
 
+	;----------------------------------------------------------------------
 	; Calculate pixels to fill
 
 	movzx edx, si
@@ -222,8 +226,13 @@ gui_draw_box:
 	mov bp, di			; BP: video memory offset backup
 	mov si, cs:[gui_plane_chars]
 	cmp dl, 0xff
-	je .fill_mid			; No partial start by fill
+	jne .fill_start
+	inc cx				; First is also a full character
+	jmp .fill_mid
 
+.fill_start:
+
+	;----------------------------------------------------------------------
 	; Fill start character of box vertically
 	; ES:DI: video memory offset for top-left pixel character
 	; BX: box height
@@ -263,6 +272,7 @@ gui_draw_box:
 .fill_mid:
 	add bp, cx			; Set to char after mid area in vmem
 
+	;----------------------------------------------------------------------
 	; Fill middle of box
 	; ES:DI: video memory offset for top-left full pixel character
 	; BX: box height
@@ -362,6 +372,7 @@ draw_box_fill_mid_done:
 
 fill_end:
 
+	;----------------------------------------------------------------------
 	; Fill last (or only) column of box vertically
 	; ES:DI: video memory offset for top-right pixel character
 	; BX: box height
@@ -421,11 +432,10 @@ draw_box_fill_single:
 ;    CL - Bitmap width in 64 pixel units (8 characters/bytes)
 ;    DX - Increment to advance to beginning of next row
 ;    %1 - Interleave index to blit (0 or 1)
-;    %2 - Jump target if blit has finished
 ; <- AX, BX, CH, SI, DI - Destroyed
 ;------------------------------------------------------------------------------
 
-%macro	blit_bitmap_ilv 2
+%macro	blit_bitmap_ilv 1
 
 	%assign plane %1
 
@@ -502,7 +512,7 @@ draw_box_fill_single:
 	dec ch
 	jnz %%octa_char_loop
 
-	jmp %2
+	jmp .done
 
 	%assign setchar setchar + 1
 	%assign reps reps - 1
@@ -518,7 +528,7 @@ draw_box_fill_single:
 ; -> DS:AX - Interleaved bitmap data
 ;    CL - Bitmap width in 64 pixel units (8 characters/bytes)
 ;    CH - Bitmap height in pixels
-;    DL - Target bitplane mask (0 - 15, color)
+;    DL - Target bitplane mask (0 - 15, color), won't change other planes
 ;    DH - Target bitmap image data interleave (0 or 1) to blit
 ;    SI - X coordinate of top left point in pixels (signed, character aligned)
 ;    DI - Y coordinate of top left point in pixels (signed)
@@ -531,19 +541,8 @@ draw_box_fill_single:
 
 	align 4
 
-blit_bitmap_exit:			; Defined here for blit_bitmap_ilv macro
-	mov ax, si			; Advance bitmap offset
-	pop es
-	pop bp
-	pop di
-	pop si
-	pop dx
-	pop cx
-	pop bx
-	retf
-
-global gui_blit_bitmap
-gui_blit_bitmap:
+global gui_blit_bitmap_interleave
+gui_blit_bitmap_interleave:
 	push bx
 	push cx
 	push dx
@@ -552,24 +551,22 @@ gui_blit_bitmap:
 	push bp
 	push es
 
+	cmp di, cs:[gui_scr_height]	; Safeguard against out of bound row
+	jae .done
+
 	mov bp, ax			; DS:BP: Interleaved bitmap
 	mov ax, 0xa000
 	mov es, ax			; ES: video RAM segment
-	mov bx, dx			; BL: color, BH: target interleave
 
-	mov ax, di
-	mul word cs:[gui_plane_chars]
+	mov bx, di
+	mov di, cs:[gui_rowtab + di + bx]
+	mov bx, dx			; BL: color, BH: target interleave
 	shr si, 3
-	mov di, ax
 	mov al, bh			; AL: target interleave
 	add di, si			; ES:DI: start address in video RAM
 
 	set_sequencer_reg 2, bl		; Write to specific planes (set color)
-	set_graph_reg 0, 0x00		; Set/Reset register: clear the rest
-	mov ah, bl			; Using AH saves an instruction in
-	not ah				; set_graph_reg
-	and ah, 0x0f
-	set_graph_reg 1, ah		; Enable Set/Reset on background planes
+	set_graph_reg 1, 0		; Disable set/reset
 	set_graph_reg 3, 0		; Ignore latched data, don't rotate
 	set_graph_reg 8, 0xff		; Use all 8 bits of data written
 
@@ -583,12 +580,617 @@ gui_blit_bitmap:
 	test bh, bh
 	jnz .interleave_1
 
-	blit_bitmap_ilv 0, blit_bitmap_exit
+	blit_bitmap_ilv 0		; Jumps to .done when ready
 
 	align 4
 
 .interleave_1:
-	blit_bitmap_ilv 1, blit_bitmap_exit
+	blit_bitmap_ilv 1
+
+.done:
+	mov ax, si			; Advance bitmap offset
+	pop es
+	pop bp
+	pop di
+	pop si
+	pop dx
+	pop cx
+	pop bx
+	retf
+
+
+;------------------------------------------------------------------------------
+; Returns the width of a text when rendered to the screen.
+;------------------------------------------------------------------------------
+; -> DS:EBX - Pointer to ASCIIZ string with text to render
+; <- CX - Width of text in pixels
+;------------------------------------------------------------------------------
+
+	align 4
+
+global gui_text_width
+gui_text_width:
+	push ax
+	push bx
+	push si
+	push edx
+	push edi
+
+	mov al, ds:[ebp]		; AL: first character code in font
+	mov ah, ds:[ebp + 1]		; AH: last character code in font
+	xor cx, cx			; CX: text width in pixels
+	mov edi, ebx			; DS:EDI: text pointer
+
+	; Get width of first character
+
+	xor edx, edx
+	mov dl, [edi]			; DL: character
+	test dl, dl
+	jz .done
+	movzx si, byte ds:[ebp + 4]	; SI: letter spacing
+	cmp dl, al			; Check glyph range
+	jb .no_glyph_first
+	cmp dl, ah
+	ja .no_glyph_first
+	sub dl, al
+	mov dx, ds:[ebp + edx * 2 + 8]	; EDX: offset of glyph definition
+	test dx, dx
+	jz .no_glyph_first
+	mov cl, ds:[ebp + edx + 1]	; CX: width of first character
+	jmp .char_width_loop
+
+.no_glyph_first:
+	mov cl, ds:[ebp + 3]		; CX: space width
+
+	; Get width of subsequent characters (also add letter spacing)
+
+.char_width_loop:
+	inc edi
+	xor edx, edx
+	mov dl, [edi]			; DL: character
+	test dl, dl
+	jz .done
+	cmp dl, al			; Check glyph range
+	jb .no_glyph
+	cmp dl, ah
+	ja .no_glyph
+	sub dl, al
+	mov bx, si			; BX: letter spacing
+	mov dx, ds:[ebp + edx * 2 + 8]	; EDX: offset of glyph definition
+	test dx, dx
+	jz .no_glyph
+	add bl, ds:[ebp + edx + 1]	; BX: letter spacing + character width
+	add cx, bx
+	jmp .char_width_loop
+
+.no_glyph:
+	add bl, ds:[ebp + 3]		; BX: letter spacing + space width
+	add cx, bx
+	jmp .char_width_loop
+
+.done:
+	pop edi
+	pop edx
+	pop si
+	pop bx
+	pop ax
+	retf
+
+
+;------------------------------------------------------------------------------
+; Render text to the screen.
+;------------------------------------------------------------------------------
+; -> AL - Text alignment (GUI_AL_*)
+;    DS:EBX - Pointer to ASCIIZ string with text to render
+;    CX - Width of container for rendered text
+;    DL - Color of the text (0 - 15)
+;    DH - Background color (0 - 15)
+;    SI - X coordinate of render origin in pixels (signed)
+;    DI - Y coordinate of top of render origin in pixels (signed)
+;    DS:EBP - Pointer to font definition
+; <- CF - Set if error
+;    EAX - Error code if CF set
+;------------------------------------------------------------------------------
+; The text will be rendered into the given container. The container is filled
+; with the background color provided in DH. Excess text is cut off.
+;------------------------------------------------------------------------------
+
+	align 4
+
+global gui_draw_text
+gui_draw_text:
+	push ebx
+	push ecx
+	push edx
+	push esi
+	push edi
+	push ebp
+	push es
+	push eax
+
+	cmp byte ds:[ebp + 2], MAX_FONT_HEIGHT
+	jae .error_font
+
+	cmp cx, 0
+	jle .done			; Maximum width reached
+
+	push cx
+	push dx
+	push si
+	push di
+
+	;----------------------------------------------------------------------
+	; Clear one line of text in render buffer
+
+	push eax
+	push ecx
+	push edi
+
+	movzx ecx, byte ds:[ebp + 2]
+	mov cx, cs:[gui_buf_rowtab + ecx * 2]
+	xor eax, eax
+	mov edi, cs:[gui_buf_addr]
+	shr cx, 2
+	mov es, ax
+	a32 rep stosd
+
+	pop edi
+	pop ecx
+	pop eax
+
+	;----------------------------------------------------------------------
+	; Render text to memory render buffer
+
+	; Handle text alignment
+
+	cmp al, GUI_AL_RIGHT
+	jb .render_text			; Align left
+	je .align_right
+
+	; Align center
+
+	mov ax, cx			; AX: container width
+	push cs
+	call gui_text_width
+	sub ax, cx			; AX: container width - text width
+	shr ax, 1			; AX: (container width - text width) / 2
+	add si, ax			; SI: X + (container - text width) / 2
+	jmp .render_text
+
+.align_right:
+
+	; Align right
+
+	mov ax, cx			; AX: container width
+	push cs
+	call gui_text_width
+	add si, ax			; SI: X + container width
+	sub si, cx			; SI: X + container width - text width
+
+.render_text:
+
+	; Determine start X coordinate
+
+	movzx esi, si
+	mov ax, cx			; AX: maximum text width in pixels
+	mov cx, si
+	and cl, 0x07			; CL: bit shift
+	shr si, 3
+	add esi, cs:[gui_buf_addr]
+	segment_address ds, edx
+	sub esi, edx			; DS:ESI: render buffer address
+	add esi, BUF_OFLOW_CHARS / 2	; Add padding
+	mov edi, cs:[gui_plane_chars]
+	add di, BUF_OFLOW_CHARS		; EDI: bytes to add for next row
+
+	push esi
+
+.render_text_loop:
+
+	; Register usage
+	; AX: maximum text width
+	; DS:EBX: ASCIIZ string current character pointer
+	; CL: glyph bitmap rotation
+	; CH: glyph height
+	; DS:EDX: glyph definition
+	; DS:ESI: render buffer pointer
+	; EDI: bytes to add for next row in render buffer
+
+	xor edx, edx
+	mov dl, [ebx]
+	test dl, dl			; DL: character to render
+	jz .blit_text			; End of string
+
+	sub dl, ds:[ebp]		; Check font character code boundaries
+	jc .no_glyph
+	cmp dl, ds:[ebp + 1]
+	ja .no_glyph
+
+	movzx edx, word ds:[ebp + edx * 2 + 8]
+	test dx, dx
+	jz .no_glyph			; No glyph, render space
+	add edx, ebp			; DS:EDX: glyph definition
+	mov ch, [edx + 2]		; CH: glyph height
+	test ch, ch
+	jz .render_empty		; No height, skip pixels
+
+	; Render glyph
+
+	push eax
+	push ebx
+	push edx
+	push esi
+
+	; Register usage
+	; AL, AH: glyph bitmap, glyph bitmap overflow (after rotate)
+	; BL, BH: bytes per row
+	; CL: glyph bitmap rotation
+	; CH: glyph height
+	; DS:EDX: glyph definition
+	; DS:ESI: render buffer pointer
+	; EDI: bytes to add for next row in render buffer
+	; DS:EBP: font definition
+
+	xor eax, eax
+	mov al, [edx + 3]		; AL: rows to skip
+	mov ax, cs:[gui_buf_rowtab + eax * 2]
+	add esi, eax			; ESI: adjust for skipped rows
+
+	xor ebx, ebx
+	mov bl, [edx]			; BL: bytes per row
+	sub edi, ebx			; EDI: bytes to add for next row - width
+	add edx, 4			; DS:EDX: glyph bitmap
+	mov bh, bl			; BH: bytes per row
+
+.render_glyph_row_loop:
+	xor ax, ax
+	mov al, [edx]			; AL: glyph bitmap
+	ror ax, cl			; AH: overflow for next character
+	or [esi], ax			; Add pixels to render buffer
+	inc edx
+	inc esi
+	dec bl
+	jnz .render_glyph_row_loop
+
+	add esi, edi			; Next row
+	mov bl, bh
+	dec ch
+	jnz .render_glyph_row_loop
+
+	xor bh, bh
+	add edi, ebx			; EDI: restore bytes to add for next row
+
+	pop esi
+	pop edx
+	pop ebx
+	pop eax
+
+.render_empty:
+	mov ch, [edx + 1]		; CH: glyph width
+
+.next_char:
+	add ch, ds:[ebp + 4]		; Character spacing
+	movzx edx, ch
+	and ch, 0x07			; CH: glyph width % 8
+	sub ax, dx			; AX: maximum width left
+	jle .blit_text			; Maximum width reached
+	shr dl, 3			; EDX: glyph byte count
+	add cl, ch
+	inc ebx				; EBX: next character in string
+	shl cl, 5			; Bit shift overflow (3rd bit) to CF
+	adc esi, edx			; ESI: adjust render buffer pointer
+	shr cl, 5			; CL: adjusted bit shift
+	jmp .render_text_loop
+
+.no_glyph:
+	mov ch, ds:[ebp + 3]		; CH: space width
+	jmp .next_char
+
+.blit_text:
+	pop eax				; EAX: render buffer start address
+	pop di
+	pop si
+
+	; Calculate render buffer start offset for blitting
+
+	movzx eax, si
+	shr ax, 3
+	add eax, cs:[gui_buf_addr]
+	segment_address ds, edx		; EDX: segment address of DS
+	sub eax, edx			; DS:ESI: render buffer address
+	add eax, BUF_OFLOW_CHARS / 2	; Add padding
+
+	pop bx				; BL: text color, BH: background color
+	pop cx
+	push eax			; Render buffer start address
+
+	;----------------------------------------------------------------------
+	; Copy text from render buffer to video memory
+
+	set_graph_reg 0, bh		; Set/Reset register: background color
+	set_graph_reg 1, 0x0f		; Enable Set/Reset on all bitplanes
+	set_graph_reg 3, 0		; Ignore latched data, don't rotate
+	set_sequencer_reg 2, 0x0f	; Enable writes to all planes
+
+	mov ax, 0xa000
+	mov es, ax
+
+	movzx edi, di
+	mov di, word cs:[gui_rowtab + edi * 2]
+	mov dx, si			; DX: left start coordinate
+	shr dx, 3
+	add di, dx			; ES:EDI: start address in video RAM
+	xor bl, bh
+	xor bl, 0x0f			; BL: text XNOR background color
+
+	; Calculate pixels to fill
+
+	movzx edx, si
+	and dx, 0x0007			; EDX: first pixel from start address
+	movzx esi, cx
+	add si, dx			; ESI: last pixel from start address
+	cmp si, 8
+	jbe .blit_single_char
+
+	mov al, cs:[fill_startmask + edx]
+	and si, 0x0007			; AL: start character pixel fill mask
+	mov ah, cs:[fill_endmask + esi]	; AH: end character pixel fill mask
+
+	;----------------------------------------------------------------------
+	; Create pixels for latch data in offscreen video memory
+	;----------------------------------------------------------------------
+	; Background color is first set in offscreen video memory for the first,
+	; middle and last characters. The color is set to the Set/Reset register
+	; and the mask register is used to overwrite pixels in the character.
+
+	; ES:DI: video memory offset for top-left pixel character
+	; BL: text color mask (text color XNOR background color)
+	; CL: number of characters to fill in the middle of the box
+	; CH: font height
+	; DL: start character pixel fill mask, 0 if no partial start char fill
+	; DH: end character pixel fill mask, 0 if no partial end char fill
+	; ES:BP: video memory offscreen address
+
+	mov si, 8
+	sub si, dx			; SI: number of pixels in start char
+	sub cx, si			; CX: width - pixels in start character
+	shr cx, 3			; CL: number of full characters to fill
+	mov dx, ax			; DX: pixel fill masks
+	mov ch, ds:[ebp + 2]		; CH: font height
+	mov bp, cs:[gui_offscr_addr]	; ES:BP: offscreen address in video RAM
+	mov si, cs:[gui_plane_chars]	; SI: number of characters per row
+
+	; Draw background characters in offscreen video memory to be used as
+	; latch data for text blitting
+
+	push dx
+	cmp dl, 0xff
+	je .skip_first_char_bg		; No partial first character, skip
+	set_graph_reg 8, dl		; Set start character pixel bitmask
+	mov ah, ch
+
+.first_char_bg_loop:
+	mov al, es:[di]
+	mov es:[bp], al			; Draw background for first partial char
+	add di, si
+	inc bp
+	dec ah
+	jnz .first_char_bg_loop
+
+.mid_char_bg:
+	test cl, cl
+	jz .last_char_bg
+	set_graph_reg 8, 0xff		; Set middle character pixel bitmask
+	mov byte es:[bp], 0xff		; Draw background for middle characters
+
+.last_char_bg:
+	pop dx
+	test dh, dh
+	jz .skip_last_char_bg
+	push dx
+	set_graph_reg 8, dh		; Set start character pixel bitmask
+
+	xor ax, ax
+	mov al, cl
+	add di, ax
+	mov ah, ch
+
+.last_char_bg_loop:
+	sub di, si			; Bottom to top!
+	inc bp
+	mov al, es:[di]
+	mov es:[bp], al			; Draw background for last partial char
+	dec ah
+	jnz .last_char_bg_loop
+
+	xor ax, ax
+	mov al, cl
+	sub di, ax			; ES:DI: video memory target start addr.
+
+	pop dx
+
+.first_char_text:
+
+	;----------------------------------------------------------------------
+	; Blit text on top of background color
+	;----------------------------------------------------------------------
+	; The latch is filled from the offscreen video memory prepared in the
+	; previous step and the text bitmap is applied using an XOR operation.
+	; The Set/Reset register is programmed with zeroes and planes where
+	; the background and foreground color's bits are the same are taken from
+	; the Set/Reset register to keep the plane's pixels unaltered (Enable
+	; Set/Reset is programmed with text color XNOR background color). The
+	; rest of the planes are XORed with the rendered text bitmap data.
+
+	pop esi				; DS:ESI: render buffer start address
+
+	push dx
+	cmp dl, 0xff
+	je .skip_first_char_text
+	set_graph_reg 8, dl		; Set start character pixel bitmask
+	set_graph_reg 0, 0		; Set/Reset register: all zero
+	set_graph_reg 1, bl		; Enable Set/Reset on color mask
+	set_graph_reg 3, 11000b		; XOR, no rotate
+
+	mov bp, cs:[gui_offscr_addr]	; ES:BP: offscreen address in video RAM
+	mov ebx, cs:[gui_plane_chars]	; SI: number of characters per row
+
+	push esi
+	push di
+	mov ah, ch
+
+.first_char_text_loop:
+	mov al, es:[bp]			; Fill latch
+	mov al, [esi]
+	mov es:[di], al			; Draw first partial character
+	add di, bx
+	add esi, ebx
+	inc bp
+	add esi, BUF_OFLOW_CHARS
+	dec ah
+	jnz .first_char_text_loop
+
+	pop di
+	pop esi
+	inc di
+	inc esi
+
+.mid_char_text:
+	test cl, cl
+	jz .skip_mid_char_text
+	set_graph_reg 8, 0xff		; Set mid character pixel bitmask
+	mov al, es:[bp]			; Fill latch
+	mov ah, ch			; AH: font height
+	mov al, ch
+	movzx ecx, cl
+	sub ebx, ecx
+	mov edx, ecx
+
+.mid_char_text_loop:
+	a32 rep movsb			; Draw middle full characters
+	add di, bx
+	add esi, ebx
+	mov cx, dx
+	add esi, BUF_OFLOW_CHARS
+	dec al
+	jnz .mid_char_text_loop
+
+	sub di, bx
+	sub esi, ebx
+	sub esi, BUF_OFLOW_CHARS
+	add ebx, edx
+
+.last_char_text:
+	pop dx
+	test dh, dh
+	jz .done
+	mov ch, ah
+	set_graph_reg 8, dh		; Set last character pixel bitmask
+
+.last_char_text_loop:
+	inc bp
+	mov al, es:[bp]
+	mov al, [esi]
+	mov es:[di], al			; Draw last partial char
+	sub esi, ebx
+	sub di, bx			; Bottom to top!
+	sub esi, BUF_OFLOW_CHARS
+	dec ch
+	jnz .last_char_text_loop
+
+	jmp .done
+
+.blit_single_char:
+
+	mov dh, cs:[fill_startmask + edx]
+	and dh, cs:[fill_endmask + esi]
+	set_graph_reg 8, dh		; Set character pixel bitmask
+	mov ch, ds:[ebp + 2]		; CH: font height
+	mov edx, cs:[gui_plane_chars]	; EDX: number of characters per row
+	mov bp, cs:[gui_offscr_addr]	; ES:BP: offscreen address in video RAM
+
+	mov ah, ch
+
+.single_char_bg_loop:
+	mov al, es:[di]
+	mov es:[bp], al			; Draw background
+	add di, dx
+	inc bp
+	dec ah
+	jnz .single_char_bg_loop
+
+	pop esi
+	push dx
+	set_graph_reg 0, 0		; Set/Reset register: all zero
+	set_graph_reg 1, bl		; Enable Set/Reset on color mask
+	set_graph_reg 3, 11000b		; XOR, no rotate
+	pop dx
+
+	movzx eax, ch
+	movzx eax, word cs:[gui_buf_rowtab + eax * 2]
+	add esi, eax
+
+.single_char_text_loop:
+	mov al, [esi]
+	dec bp
+	sub esi, edx
+	mov bl, es:[bp]
+	sub di, dx
+	sub esi, BUF_OFLOW_CHARS
+	mov es:[di], al
+	dec ch
+	jnz .single_char_text_loop
+
+	jmp .done
+
+.done:
+	pop eax
+
+.exit:
+	pop es
+	pop ebp
+	pop edi
+	pop esi
+	pop edx
+	pop ecx
+	pop ebx
+	retf
+
+.skip_first_char_bg:
+	movzx eax, ch
+	add di, cs:[gui_rowtab + eax * 2]
+	inc cl
+	jmp .mid_char_bg
+
+.skip_last_char_bg:
+	movzx eax, ch
+	sub di, cs:[gui_rowtab + eax * 2]
+	jmp .first_char_text
+
+.skip_first_char_text:
+	set_graph_reg 0, 0		; Set/Reset register: all zero
+	set_graph_reg 1, bl		; Enable Set/Reset on color mask
+	set_graph_reg 3, 11000b		; XOR, no rotate
+	mov bp, cs:[gui_offscr_addr]	; ES:BP: offscreen address in video RAM
+	mov ebx, cs:[gui_plane_chars]	; SI: number of characters per row
+	jmp .mid_char_text
+
+.skip_mid_char_text:
+	cmp dl, 0xff
+	je .last_char_text
+	movzx eax, ch
+	dec eax
+	add di, cs:[gui_rowtab + eax * 2]
+	movzx eax, word cs:[gui_buf_rowtab + eax * 2]
+	add esi, eax
+	mov ah, ch
+	jmp .last_char_text
+
+.error_font:
+	mov eax, GUI_ERR_FONT
+	add sp, 4			; Discard EAX from stack
+	stc
+	jmp .exit
 
 
 ;==============================================================================

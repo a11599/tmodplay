@@ -36,6 +36,7 @@ segment modplayer
 ; <- CF - Set if error
 ;    EAX - Error code if CF set or actual sample rate
 ;    EBX - 0 if no error
+;    ECX - 0 if no error
 ;------------------------------------------------------------------------------
 
 	align 4
@@ -55,6 +56,7 @@ setup:
 	; Done
 
 	xor ebx, ebx
+	xor ecx, ecx
 	clc
 
 	pop edx

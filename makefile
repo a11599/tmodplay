@@ -266,6 +266,8 @@ obj\system\string.obj: src\system\string.asm &
 
 obj\gui\setup.obj: src\gui\setup.asm &
 	src\gui\consts\public.inc &
+	src\gui\consts\global.inc &
+	src\system\api\memory.inc &
 	src\debug\log.inc
 
 	$(nasm) $(nasmopts) $[@ -o $^@
@@ -273,11 +275,15 @@ obj\gui\setup.obj: src\gui\setup.asm &
 obj\gui\draw.obj: src\gui\draw.asm &
 	src\gui\api\setup.inc &
 	src\gui\consts\global.inc &
+	src\gui\consts\public.inc &
+	src\system\api\memory.inc &
 	src\debug\log.inc
 
 	$(nasm) $(nasmopts) $[@ -o $^@
 
 obj\tmodplay.obj: src\tmodplay.asm &
+	src\fonts\rpgsys.inc &
+	src\fonts\sgk075.inc &
 	src\system\api\memory.inc &
 	src\system\api\file.inc &
 	src\system\api\env.inc &

@@ -158,6 +158,7 @@ mod_setup:
 	call [out_fn(setup)]
 	jc .error
 	mov [mod.extra_samples], ebx
+	mov [mod.sample_padding], ecx
 	add sp, 2			; Discard ES from stack
 	clc
 
@@ -222,12 +223,13 @@ mod_load:
 	; Read samples from MOD file
 
 	mov ebp, [mod.extra_samples]
+	add ebp, [mod.sample_padding]
 	mov esi, mod.sample_hdr
 	mov dl, [mod.num_samples]
 	test dl, dl
 	jz .done
 
-	log {'Wavetable requires {u} bytes of extra memory after each sample', 13, 10, 'Loading samples', 13, 10}, ebp
+	log {'Wavetable requires {u} bytes of extra memory for each sample', 13, 10, 'Loading samples', 13, 10}, ebp
 
 .loop_sample:
 	mov ebx, [si + sample(length)]
@@ -249,6 +251,7 @@ mod_load:
 
 	mov ebx, [mod.file_handle]
 	mov edi, eax
+	add edi, [mod.sample_padding]	; Load after padding
 	call far [file_fn(read)]
 	jc .error_close
 

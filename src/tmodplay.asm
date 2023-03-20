@@ -28,7 +28,7 @@ SCOPE_H_SHIFTS	EQU 5			; >=3, width of scope, 2 ^ n characters
 SCOPE_WIDTH	EQU (1 << SCOPE_H_SHIFTS) / 8
 SCOPE_V_SHIFTS	EQU 1			; >=1, height of scope, 256 >> n pixels
 SCOPE_HEIGHT	EQU 256 >> SCOPE_V_SHIFTS
-SCOPE_COLOR	EQU 15			; Color of the scope
+SCOPE_COLOR	EQU 10			; Color of the scope
 SCOPE_BMP_SIZE	EQU SCOPE_HEIGHT * SCOPE_WIDTH * 64 * 2 / 8
 SCOPE_PADDING	EQU 2			; Scope padding in 16 pixels
 
@@ -79,6 +79,9 @@ segment app
 	; ---------------------------------------------------------------------
 	; Initialize system
 
+	segment_address ds, eax
+	mov [data_seg_addr], eax
+
 	call far sys_mem_setup		; Memory management - first thing to do
 	jnc .init_env
 	mov esi, errtab_sys		; Display system error message
@@ -98,12 +101,6 @@ segment app
 	jmp .exit_fail_sys_file
 
 .init_log:
-	xor eax, eax
-	mov ax, ds
-	mov es, ax			; ES: data segment
-	shl eax, 4
-	mov [data_seg_addr], eax
-
 	call far sys_file_get_buf_addr	; Save I/O buffer address rel. to DS
 	sub ebx, [data_seg_addr]
 	mov [io_buf_addr], ebx
@@ -165,7 +162,7 @@ segment app
 	call echo
 
 	mov edi, file_fns		; Setup modplayer
-	call far mod_setup
+	call far mod_setup		; ES: player instance segment
 	jc .mod_error
 
 	mov esi, msg_samplerate		; Show samplerate info
@@ -248,7 +245,17 @@ segment app
 	jc .mod_error
 	shr eax, 4
 	mov [scope_bmp_seg], ax
-	log {'Allocated {u} bytes for oscilloscope bitmap interleave @{x16}:0000', 13, 10}, ebx, ax
+	log {'Allocated {u} bytes for oscilloscope bitmap interleave @{X16}:0000', 13, 10}, ebx, ax
+
+	; Clear oscilloscope bitmap
+
+	push es
+	mov es, ax
+	xor di, di
+	mov cx, SCOPE_BMP_SIZE / 2
+	xor eax, eax
+	rep stosd
+	pop es
 
 	; ---------------------------------------------------------------------
 	; Start playback and run the user interface
@@ -323,6 +330,53 @@ run_ui:
 	push edi
 	push ebp
 
+	mov si, 0
+	mov di, 6
+	mov cx, 640
+	mov bx, 20
+	mov dl, 7
+	call far gui_draw_box
+
+	mov al, GUI_AL_CENTER
+	mov ebx, [mod_info_addr + mod_info.title]
+	mov cx, 440
+	mov dx, 0x040e
+	mov si, 100
+	mov di, 0
+	mov ebp, font_rpgsystem
+	call far gui_draw_text
+
+	; Display sample names
+
+	mov al, GUI_AL_LEFT
+	mov ebx, [mod_info_addr]
+	lea ebx, [ebx + mod_info.samples + mod_sample_info.name]
+	mov cx, 22 * 7
+	mov dx, 0x0007
+	mov si, 320 - (SCOPE_WIDTH * 64 + SCOPE_PADDING * 8) + (256 - 22 * 7) / 2
+	mov di, 480 - 16 * 16
+	mov ebp, font_sgk075
+
+	mov ah, 16
+
+.sample_1_loop:
+	call far gui_draw_text
+	lea ebx, [ebx + mod_sample_info.strucsize]
+	add di, 16
+	dec ah
+	jnz .sample_1_loop
+
+	mov ah, 15
+	mov si, 320 + (SCOPE_PADDING * 8) + (256 - 22 * 7) / 2
+	mov di, 480 - 16*16
+
+.sample_2_loop:
+	call far gui_draw_text
+	lea ebx, [ebx + mod_sample_info.strucsize]
+	add di, 16
+	dec ah
+	jnz .sample_2_loop
+
 .run_loop:
 	mov dx, 0x3da
 
@@ -351,12 +405,12 @@ run_ui:
 
 	; Render scopes to scope bitmap memory
 
-	logframe 0, 0, 24, 24
+	logframe 0, 0, 12, 12
 	call render_scopes
 
 	; Render audio (within same frame in best case)
 
-	logframe 0, 0, 16, 32
+	logframe 0, 0, 8, 16
 	call far mod_render
 
 	; Check pending keystroke
@@ -419,7 +473,7 @@ draw_scopes:
 	xor ax, ax			; DS:AX: scope bitmap
 	mov dl, SCOPE_COLOR		; DL: scope color
 	mov si, es:[gui_scr_width]
-	mov di, 100			; DI: Y coordinate
+	mov di, 64			; DI: Y coordinate
 	shr si, 1			; SI: horizontal center X coordinate
 
 	cmp bl, MOD_BUF_2CHN
@@ -429,9 +483,9 @@ draw_scopes:
 
 	sub si, SCOPE_WIDTH * 64 + SCOPE_PADDING * 8
 	mov cx, SCOPE_HEIGHT * 256 + SCOPE_WIDTH
-	call far gui_blit_bitmap
+	call far gui_blit_bitmap_interleave
 	add si, SCOPE_WIDTH * 64 + SCOPE_PADDING * 16
-	call far gui_blit_bitmap
+	call far gui_blit_bitmap_interleave
 	jmp .done
 
 .mono:
@@ -440,7 +494,7 @@ draw_scopes:
 
 	sub si, SCOPE_WIDTH * 64
 	mov cx, SCOPE_HEIGHT * 256 + SCOPE_WIDTH * 2
-	call far gui_blit_bitmap
+	call far gui_blit_bitmap_interleave
 
 .done:
 	pop es
@@ -452,6 +506,54 @@ draw_scopes:
 	mov [scope_blit_ilv], dh
 
 	retn
+
+
+;------------------------------------------------------------------------------
+; Compare sample value to centerline in output buffer.
+;------------------------------------------------------------------------------
+; -> DS:ESI - Pointer to sample in output buffer
+;    %1 - Buffer bitdepth (MOD_BUF_DEPTH constants)
+;    %2 - Sample range (signed/unsigned, MOD_BUF_RANGE constants)
+;    %3 - 1 to check if above, -1 to check if below
+;    %4 - Jump target if condition met
+; <- Destroys everything except segment registers
+;------------------------------------------------------------------------------
+
+%macro	cmp_sample 4
+
+	%if (%2 = MOD_BUF_UINT)
+
+	%if (%1 = MOD_BUF_8BIT)
+	%assign center 0x80
+	%else
+	%assign center 0x8000
+	%endif				; Bit depth
+	%define if_above ja
+	%define if_below jb
+
+	%else
+
+	%assign center 0
+	%define if_above jg
+	%define if_below jl
+
+	%endif
+
+	%if (%1 = MOD_BUF_8BIT)
+	cmp byte [esi], center
+	%elif (%1 = MOD_BUF_16BIT)
+	cmp word [esi], center
+	%elif (%1 = MOD_BUF_1632BIT)
+	cmp dword [esi], center
+	%endif
+
+	%if (%3 = 1)
+	if_above %4
+	%else
+	if_below %4
+	%endif
+
+%endmacro
 
 
 ;------------------------------------------------------------------------------
@@ -530,10 +632,9 @@ draw_scopes:
 	jae .reset_search_pos		; Yes, reset position
 
 .search_pos:
-	cmp word [esi], 0x8000		; Sample above centerline?
-	jae .found_pos
-	add esi, sample_next
-	dec ah				; Nope, check next one
+	cmp_sample %1, %3, 1, .found_pos
+	add esi, sample_next		; Below centerline, check next one
+	dec ah
 	jnz .loop_search_pos
 	mov esi, ebx			; Nothing above centerline, fallback
 	jmp .start_render
@@ -546,10 +647,9 @@ draw_scopes:
 	jae .reset_search_neg		; Yes, reset position
 
 .search_neg:
-	cmp word [esi], 0x8000		; Sample below centerline?
-	jbe .start_render
-	add esi, sample_next
-	dec ah				; Nope, check next one
+	cmp_sample %1, %3, -1, .start_render
+	add esi, sample_next		; Above centerline, check next one
+	dec ah
 	jnz .loop_search_neg
 	mov esi, ebx			; Nothing below centerline, fallback
 
@@ -1148,6 +1248,11 @@ parse_args:
 	jc .check_device
 
 	or byte [arg_flags], ARG_IPOL_SET
+	mov edi, arg_ipol_watte		; /ipol:watte
+	mov ecx, -1
+	mov byte [ebx + mod_out_params.interpolation], MOD_IPOL_WATTE
+	call far sys_str_cmp
+	jnc .check_device
 	mov edi, arg_ipol_linear	; /ipol:linear
 	mov ecx, -1
 	mov byte [ebx + mod_out_params.interpolation], MOD_IPOL_LINEAR
@@ -1735,7 +1840,8 @@ usage		db 'Usage: tmodplay <filename.mod> [options]',13, 10, 13, 10
 		db '/ipol:mode          Set sample interpolation mode for software wavetable', 13, 10
 		db '                    renderer. Accepted values for "mode":', 13, 10
 		db '                    - nearest: Nearest neighbor (similar to Amiga)', 13, 10
-		db '                    - linear: Linear interpolation (similar to GUS, slow)', 13, 10, 13, 10
+		db '                    - linear: Linear interpolation (similar to GUS, slow)', 13, 10
+		db '                    - watte: Watte tri-linear interpolation (HQ, very slow)', 13, 10, 13, 10
 		db '/?                  Display this command line usage information.', 13, 10
 		db 0
 
@@ -1768,6 +1874,7 @@ arg_amp		db '/amp', 0
 arg_ipol	db '/ipol', 0
 arg_ipol_nn	db 'nearest', 0
 arg_ipol_linear	db 'linear', 0
+arg_ipol_watte	db 'watte', 0
 arg_help	db '/?', 0
 
 arg_flags	db 0
@@ -1846,7 +1953,7 @@ errtab_sys	dd SYS_ERR_V86, err_sys_v86
 		dd 0x0f, err_dos_0f
 		dd 0, err_generic
 
-errtab_gui	dd VID_ERR_NOVGA, err_gui_novga
+errtab_gui	dd GUI_ERR_NOVGA, err_gui_novga
 		dd 0x02, err_dos_02
 		dd 0x03, err_dos_03
 		dd 0x04, err_dos_04
@@ -1913,6 +2020,11 @@ file_fns	istruc mod_file_fns
 		set_file_fn(read, sys_file_read)
 		set_file_fn(close, sys_file_close)
 		iend
+
+		; Fonts for GUI rendering
+
+%include "fonts/rpgsys.inc"
+%include "fonts/sgk075.inc"
 
 
 ;==============================================================================

@@ -25,7 +25,7 @@ extern log_shutdown
 
 
 ;------------------------------------------------------------------------------
-; Log formatted string to stdout.
+; Log formatted string.
 ;------------------------------------------------------------------------------
 ; -> %1 - Source string literal for sys_str_format
 ;    %2... - Placeholder values. Memory addresses cannot use the CS: prefix!
@@ -216,7 +216,7 @@ extern log_shutdown
 
 
 ;------------------------------------------------------------------------------
-; Log flags to the standard output.
+; Log flags.
 ;------------------------------------------------------------------------------
 
 %macro	logf 0

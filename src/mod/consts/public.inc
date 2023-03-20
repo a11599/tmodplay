@@ -48,6 +48,7 @@ MOD_PAN_REAL	EQU 3			; Real panning (use effects 8xx and E8x)
 
 MOD_IPOL_NN	EQU 0			; Nearest neighbour interpolation
 MOD_IPOL_LINEAR	EQU 1			; Linear interpolation
+MOD_IPOL_WATTE	EQU 2			; Watte tri-linear interpolation
 
 ; Output buffer formats
 

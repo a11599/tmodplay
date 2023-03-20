@@ -5,18 +5,22 @@
 ; Gravis Ultrasound-like capabilities in software to the extent required by
 ; MOD playback.
 ;------------------------------------------------------------------------------
-; 86Box 386DX clocks used with little output clipping at 44100 Hz samplerate:
+; 86Box 386DX clocks used with no output clipping at 44100 Hz samplerate:
 ;
 ; Stereo mode   Interpolation   MHz per channel for rendering    MHz for mixing
 ; -----------   -------------   -----------------------------    --------------
 ; Mono          Nearest                                  1.92              1.89
 ; Mono          Linear                                   3.56              1.89
+; Mono          Watte                                   10.50              1.89
 ; Hard          Nearest                                  1.96              2.55
 ; Hard          Linear                                   3.65              2.55
+; Hard          Watte                                   11.05              2.55
 ; Cross         Nearest                                  1.96              4.67
 ; Cross         Linear                                   3.68              4.67
+; Cross         Watte                                   11.16              4.67
 ; Real          Nearest                                  3.17              2.55
 ; Real          Linear                                   4.68              2.55
+; Real          Watte                                   13.76              2.55
 ;
 ; Performance scales linearly with sample rate.
 ;==============================================================================
@@ -52,6 +56,8 @@ segment modplayer
 ; <- CF - Set on error
 ;    EAX - Error code if CF set or number of extra samples that will be
 ;          generated at the end of each sample (must reserve enough space)
+;    ECX - Number of extra samples that will be generated at the beginning of
+;          each sample (must reserve enough space)
 ;------------------------------------------------------------------------------
 
 	align 4
@@ -153,6 +159,7 @@ mod_swt_setup:
 	log {'Software wavetable initialized', 13, 10}
 
 	mov eax, UNROLL_SAMPLES
+	mov ecx, SAMPLE_PADDING
 	clc
 	jmp .exit
 
@@ -249,10 +256,13 @@ mod_swt_set_interpolation:
 
 	mov cx, render_store_fn
 	mov bx, render_mix_fn
-	test al, al
-	jz .set_render_fns
+	cmp al, 1
+	jb .set_render_fns
 	mov cx, renlin_store_fn
 	mov bx, renlin_mix_fn
+	je .set_render_fns
+	mov cx, renwtl_store_fn
+	mov bx, renwtl_mix_fn
 
 .set_render_fns:
 	mov cs:[render_store_fn_addr], cx
@@ -309,8 +319,7 @@ mod_swt_init_voltab:
 	push ecx
 	push edx
 	push esi
-	push edi
-	push ebp
+	push di
 	push es
 
 	cld
@@ -325,7 +334,7 @@ mod_swt_init_voltab:
 	mov bx, 0x0400
 
 .init_voltab:
-	xor edi, edi			; ES:EDI: volume table
+	xor di, di			; ES:DI: volume table
 
 	log {'Initializing volume table @{X16}:0000, amplification: {q16:256.2}x', 13, 10}, es, bx
 
@@ -336,86 +345,48 @@ mod_swt_init_voltab:
 
 	mov ecx, 256 / 2
 	xor eax, eax
-	a32 rep stosd
+	rep stosd
 
 	; Calculate values for volumes between 1 - 64
 
-	; (E)AX: scaled sample value
-	; (E)BX: amplification
-	; CL: volume
-	; CH: output bitdepth
-	; EDX: positive sample value scaling multiplier
-	; ESI: negative sample value scaling multiplier
-	; EDI: mixer table entry address
-	; (E)BP: sample value
+	; EAX: scaled sample value
+	; EBX: amplification
+	; ECX: volume
+	; EDX: sample value scaling multiplier
+	; ES:DI: volume table entry address
+	; (E)SI: sample value
 
-	mov ch, [state(output_format)]
-	and ch, FMT_BITDEPTH		; CH: device output bitdepth
-	mov cl, 1			; CL: volume
+	inc ecx				; ECX: volume
+	xor eax, eax
 
 	align 4
 
 .loop_volume:
-	xor ebp, ebp			; (E)BP: sample value, -128 - 127
+	xor esi, esi			; ESI: sample value, -128 - 127
 
 	; Calculate positive and negative multipliers for proper sample scaling.
-	; A simple bitshift is not enough, it doesn't do proper rounding and
-	; wouldn't scale the positive range for 16-bit output properly. Create
-	; two 16.16 bit fixed point multipliers, one for the negative and one
-	; for the positive range. They will be used to expand -128 - 127 to
-	; -32768 - 32767, but only for 16-bit output. For 8-bit output, the
-	; range is only extended to -32768 - 32512 to make it easier to convert
-	; back to 8-bit before the output stage.
 
-	movzx esi, cl			; (E)SI: negative sample multiplier
-	imul esi, ebx			; volume * eff. amp.
-	mov eax, esi			; Save for positive multiplier calc.
-	shl esi, 8			; volume * eff. amp. * 32768 / 128
-	mov edx, esi
-	cmp ch, FMT_8BIT		; 8-bit output: use same for positive
-	je .loop_scale_sample
-
-	push ebx
-	mov ebx, eax
-	shl eax, 15
-	sub eax, ebx			; volume * eff. amp * 32767
-	mov ebx, 127
-	xor edx, edx
-	div ebx				; floor(volume * eff. amp * 32767 / 127)
-	pop ebx
-	shr edx, 6			; remainder: 0 - 63 -> 0; 64 - 126 -> 1
-	add edx, eax			; round(volume * eff. amp * 32767 / 127)
+	mov edx, ebx			; EDX: sample multiplier
+	imul edx, ecx			; volume * eff. amp.
+	shl edx, 8			; volume * eff. amp. * 32768 / 128
 
 	align 4
 
 .loop_scale_sample:
-	mov eax, ebp
-	cmp eax, 0			; If sample = 0, output is also 0
-	je .store_sample
-	jl .negative_sample
-
-	imul eax, edx			; Positive sample
-	jmp .round_sample
-
-.negative_sample:
-	imul eax, esi			; Negative sample
-
-.round_sample:
+	mov eax, edx
+	imul eax, esi
 	add eax, 32767			; Rounding
-	shr eax, 16			; (E)AX: scaled sample value
-
-.store_sample:
-	a32 stosw			; Store volume table entry
+	shr eax, 16			; EAX: scaled sample, high word clear
+	stosw				; Store volume table entry
 
 	; To ensure correct order in the volume table, go from 0 - 127, then
 	; -128 - -1.
 
-	inc ebp				; Next sample value
-	cmp ebp, 0
-	je .next_vol
-	cmp ebp, 127
+	inc si				; Next sample value
+	jz .next_vol
+	cmp si, 127
 	jle .loop_scale_sample
-	mov ebp, -128
+	mov si, -128
 	jmp .loop_scale_sample
 
 	align 4
@@ -427,8 +398,7 @@ mod_swt_init_voltab:
 
 .exit:
 	pop es
-	pop ebp
-	pop edi
+	pop di
 	pop esi
 	pop edx
 	pop ecx
@@ -452,13 +422,13 @@ mod_swt_init_ipoltab:
 	push ecx
 	push edx
 	push esi
-	push edi
+	push di
 	push es
 
 	cld
 
 	mov es, [state(ipoltab_seg)]	; ES: linear interpolation table segment
-	xor edi, edi			; ES:EDI: linear interpolation table
+	xor di, di			; ES:DI: linear interpolation table
 
 	; Calculate fractional values for sample differences. The table consists
 	; of 2^LIN_IPOL_EXP rows, where each row contains 256 words for
@@ -488,7 +458,7 @@ mod_swt_init_ipoltab:
 	imul si
 	sar ax, LIN_IPOL_EXP
 	adc ax, 0
-	a32 stosw
+	stosw
 	inc bx
 	cmp bx, 255
 	jle .loop_samples_pos
@@ -503,7 +473,7 @@ mod_swt_init_ipoltab:
 	imul si
 	sar ax, LIN_IPOL_EXP
 	adc ax, 0
-	a32 stosw
+	stosw
 	inc bx
 	cmp bx, 0
 	jle .loop_samples_neg
@@ -514,7 +484,7 @@ mod_swt_init_ipoltab:
 
 .exit:
 	pop es
-	pop edi
+	pop di
 	pop esi
 	pop edx
 	pop ecx
@@ -548,15 +518,24 @@ mod_swt_upload_sample:
 
 	cld
 
+	xor ax, ax
+	mov es, ax			; ES: zeropage
+	mov edi, [si + sample(addr)]
+	test edi, edi
+	jz .done			; No sample, nothing to do
+
+	; Fill padding area with zeroes to prevent clicks with Watte
+	; interpolation.
+
+	mov al, es:[edi + SAMPLE_PADDING]
+	mov ecx, SAMPLE_PADDING
+	a32 rep stosb
+
 	; Unroll the sample: add extra samples to the end, so there is no need
 	; to worry about reaching the (loop) end of the sample in the unrolled
 	; render loop.
 
-	xor ax, ax
-	mov es, ax			; ES: zeropage
 	mov eax, [si + sample(addr)]
-	test eax, eax
-	jz .done			; No sample, no unroll
 	mov ebx, [si + sample(rpt_start)]
 	mov edx, [si + sample(rpt_len)]
 
@@ -619,6 +598,7 @@ mod_swt_upload_sample:
 	test eax, eax
 	jz .no_sample
 	sub eax, [mod.instance_addr]
+	add eax, SAMPLE_PADDING
 
 .no_sample:
 	xor dh, dh
@@ -796,6 +776,7 @@ mod_swt_set_mixer:
 	push bx
 	push cx
 	push fs
+	push si
 
 	mov cx, modplayer_data
 	mov fs, cx			; FS: modplayer_data segment
@@ -805,11 +786,14 @@ mod_swt_set_mixer:
 	call .calc_pan_volume
 	mov [di + channel.right_volume], ch
 	mov [di + channel.right_bitshift], cl
+	mov [di + channel.right_pan_mul], si
 	not bh				; BH: invert pan for left channel
 	call .calc_pan_volume
 	mov [di + channel.left_volume], ch
 	mov [di + channel.left_bitshift], cl
+	mov [di + channel.left_pan_mul], si
 
+	pop si
 	pop fs
 	pop cx
 	pop bx
@@ -833,26 +817,29 @@ mod_swt_set_mixer:
 ;    FS - Segment of modplayer_data
 ; <- CL - Pan bitshift
 ;    CH - Left/right channel volume
+;    SI - Pan multiplier (0 - 256)
 ;------------------------------------------------------------------------------
 
 	align 4
 
 .calc_pan_volume:
-	push eax
+	push ax
 	push ebx
 	push dx
 
 	xor cl, cl			; CL: pan bitshift
 	mov ch, al			; CH: channel volume
+	mov si, 0x100
 	cmp bh, 255
 	je .use_pan_volume
 
 	; Calculate panned volume using panning table
 
-	movzx eax, al
 	movzx ebx, bh
-	mov bx, fs:[pantab + ebx * 2]
-	xchg ax, bx			; Improves mul speed because AX is less
+	mov si, fs:[pantab + ebx * 2]
+	mov bl, al			; BX: sample (BH is already zero)
+	mov ax, si			; AX: pan ratio (16-bit)
+	shr si, 8			; SI: pan multiplier
 	mul bx
 	mov ch, dl
 	cmp dl, 32			; Panned volume >= 32: pan bitshift = 0
@@ -879,7 +866,7 @@ mod_swt_set_mixer:
 .use_pan_volume:
 	pop dx
 	pop ebx
-	pop eax
+	pop ax
 	retn
 
 
@@ -1003,30 +990,13 @@ mod_swt_get_mixer_info:
 	mov byte cs:[%%reset_sample_jmp_dest], %%loop_sample - %%reset_sample_jmp
 	mov eax, ebx
 	add eax, [si + sample(rpt_start)]
+	%if (%4 = RENDER_IPOL_WTL)
+	inc eax				; Click-prevention when wrapping back
+	%endif
 
 %%init_sample_length:
 	add eax, [si + sample(wt_id)]	; Relative to player instance
 	mov cs:[%%sample_length], eax	; Sample length or repeat end position
-
-	; Real panning
-
-	%if (%3 = RENDER_PAN_REAL)
-
-	mov al, [di + channel.left_bitshift]
-	%assign repcnt 1
-	%rep UNROLL_COUNT		; Left sample bitshift
-	mov cs:[%%left_bitshift_ %+ repcnt], al
-	%assign repcnt repcnt + 1
-	%endrep
-
-	mov al, [di + channel.right_bitshift]
-	%assign repcnt 1
-	%rep UNROLL_COUNT		; Right sample bitshift
-	mov cs:[%%right_bitshift_ %+ repcnt], al
-	%assign repcnt repcnt + 1
-	%endrep
-
-	%endif
 
 	pop ecx				; Restore render buffer address
 	push esi
@@ -1049,14 +1019,60 @@ mod_swt_get_mixer_info:
 	; DS: player instance segment
 	; FS: volume table segment
 
+	%if (%4 = RENDER_IPOL_WTL)
+
+	; Volume and panning constants for Watte interpolation
+
+	mov al, [di + channel.volume]
+	%assign repcnt 1
+	%rep UNROLL_COUNT		; Volume for Watte interpolation
+	mov cs:[%%wtl_volume %+ repcnt], al
+	%assign repcnt repcnt + 1
+	%endrep
+
 	%if (%3 = RENDER_PAN_REAL)
+	mov eax, [di + channel.left_pan_mul]
+	mov ebx, [di + channel.right_pan_mul]
+	%assign repcnt 1
+	%rep UNROLL_COUNT		; Panning ratio for Watte interpolation
+	mov cs:[%%wtl_left_pan_mul %+ repcnt], eax
+	mov cs:[%%wtl_right_pan_mul %+ repcnt], ebx
+	%assign repcnt repcnt + 1
+	%endrep
+	%endif
+
+	%else
+
+	; Volume and panning for nearest and linear interpolation
+
+	%if (%3 = RENDER_PAN_REAL)
+
+	mov al, [di + channel.left_bitshift]
+	%assign repcnt 1
+	%rep UNROLL_COUNT		; Left sample bitshift for real panning
+	mov cs:[%%left_bitshift_ %+ repcnt], al
+	%assign repcnt repcnt + 1
+	%endrep
+
+	mov al, [di + channel.right_bitshift]
+	%assign repcnt 1
+	%rep UNROLL_COUNT		; Right sample bitshift for real panning
+	mov cs:[%%right_bitshift_ %+ repcnt], al
+	%assign repcnt repcnt + 1
+	%endrep
+
 	movzx ebx, byte [di + channel.left_volume]
 	shl ebx, 8
 	movzx edx, byte [di + channel.right_volume]
 	shl edx, 8
-	%else
+
+	%else				; RENDER_PAN_REAL
+
 	movzx ebx, byte [di + channel.volume]
 	shl ebx, 8
+
+	%endif
+
 	%endif
 
 	mov bp, [di + channel.sample_pos_fr]
@@ -1182,6 +1198,127 @@ mod_swt_get_mixer_info:
 
 %%render_cnt_ %+ rendercnt:
 
+	; There are two separate code paths to handle nearest neighbour, linear
+	; and the high quality Watte interpolation. The former two operate in
+	; the 8-bit sample domain and then apply volume/amplification and
+	; panning via lookup tables (no multiplications). This is better suited
+	; for 386s and older, L2 cacheless 486s. Operating in the 8-bit domain
+	; doesn't matter for nearest neighbour. Linear interpolation's quality
+	; is somewhat degraded by this, however it still sounds pretty good and
+	; allows avoiding slow multiplications.
+	;
+	; Watte on the other hand operates in 16-bit domain. Not only because
+	; it's the high quality resampler, but because it can produce overshoot
+	; (the interpolated sample may exceed the 8-bit range). Extending the
+	; volume lookup table (which is already over 32 KB) was no-go and
+	; clipping the oversampled value to 8-bits was slow and causes nasty
+	; artefacts, something i really don't want from a HQ resampler. Watte
+	; needs two multiplications for the calculation of the interpolated
+	; sample. Volume and amplification is applied using the volume table.
+	; For real panning, two additional multiplications are necessary to
+	; calculate sample values for left and right channels.
+
+	;----------------------------------------------------------------------
+	; Jon Watte tri-linear interpolation.
+
+	%if (%4 = RENDER_IPOL_WTL)
+
+	; Code adapted from Olli Niemitalo's "Polynomial Interpolators for
+	; High-Quality Resampling of Oversampled Audio" paper (deip.pdf).
+	;
+	; // 4-point, 2nd-order Watte tri-linear (x-form)
+	; float ym1py2 = y[-1]+y[2];
+	; float c0 = y[0];
+	; float c1 = 3/2.0*y[1] - 1/2.0*(y[0]+ym1py2);
+	; float c2 = 1/2.0*(ym1py2-y[0]-y[1]);
+	; return (c2*x+c1)*x+c0;
+
+	; This interpolation method has pretty good quality, much cleaner, than
+	; linear, but that is partly due to operating in the 16-bit domain. Also
+	; it can mostly be done using integer operations only except for the
+	; multiplications in the last C line. May sound dull on MODs with low
+	; quality samples though.
+
+	push edi
+
+	mov edx, [esi - 1]		; [-1][0][1][2]
+	mov ebx, 0x1200			; FS:EBX: index into volume table
+	%%wtl_volume %+ repcnt EQU $ - 3
+	rol edx, 8			; [2][-1][0][1]
+	mov bl, dl			; [2]
+	movsx eax, word fs:[ebx * 2]	; EAX: y[2]
+	mov bl, dh			; [-1]
+	movsx ecx, word fs:[ebx * 2]	; ECX: y[-1]
+	shr edx, 16			; [0][1], EDX high word 0
+	mov bl, dl			; [0]
+	add ecx, eax			; ECX: ym1py2 = y[-1] + y[2]
+	movsx eax, word fs:[ebx * 2]	; EAX: c0 = y[0]
+	mov bl, dh			; [1]
+	sub ecx, eax			; ECX: ym1py2 - y[0]
+	lea edi, [ecx + eax * 2]	; EDI: y[0] + ym1py2
+	mov dx, bp
+	movsx ebx, word fs:[ebx * 2]	; EBX: y[1]
+	shr dx, (16 - WATTE_IPOL_EXP)	; EDX: Fractional part for interpolation
+	sub ecx, ebx			; ECX: c2 * 2 = ym1py2 - y[0] - y[1]
+	lea ebx, [ebx * 2 + ebx]	; EBX: 3 * y[1]
+	imul ecx, edx			; ECX: c2 * 2 * x
+	sub ebx, edi			; EBX: c1 * 2 = 3 * y[1] - y[0] - ym1py2
+	shl ebx, WATTE_IPOL_EXP		; EBX: c1 * 2 (fixed point normalized)
+	add ecx, ebx			; ECX: c2 * 2 * x + c1 * 2
+	imul ecx, edx			; ECX: (c2 * 2 * x + c1 * 2) * x
+	sar ecx, WATTE_IPOL_EXP * 2 + 1	; ECX: (c2 * x + c1) * x
+	add eax, ecx			; EAX: (c2 * x + c1) * x + c0
+
+	pop edi
+
+	%if (%3 = RENDER_PAN_HARD)
+
+	; Hard panning: render sample for primary channel, clear/skip other
+	; channel
+
+	store_sample %1, pan_idx, 0
+	store_sample %1, sample_idx, eax
+
+	%elif (%3 = RENDER_PAN_X)
+
+	; Fixed panning with crossfade: store/mix 75% of rendered sample to
+	; panned channel. This is only used for the last channel, the rest is
+	; mixed with hard pan. It is much faster that way, the cross-mixing is
+	; done here, in the last channel. However, care must be taken to process
+	; the rest of the buffer if nothing is playing in the last channel or
+	; the sample ends before the end of buffer.
+
+	mov edx, [edi + pan_idx]	; EDX: ch2 hard pan sample
+	add eax, [edi + sample_idx]	; EAX: ch1 hard pan sample
+	lea ecx, [edx * 2 + edx]
+	sar ecx, 2			; ECX: .75 * ch2 hard pan sample
+	add ecx, eax			; ECX: ch1 + .75 * ch2 cross-mixed
+	mov [edi + sample_idx], ecx	; ch1: ch1 + .75 * ch2 cross-mixed
+	lea ecx, [eax * 2 + eax]
+	sar ecx, 2			; ECX: .75 * ch1 hard pan sample
+	add ecx, edx			; ECX: ch2 + .75 * ch1 cross-mixed
+	mov [edi + pan_idx], ecx	; ch2: ch2 + .75 * ch1 cross-mixed
+
+	%elif (%3 = RENDER_PAN_REAL)
+
+	; Real panning: multiply sample value by panning ratio for each channel.
+
+	imul edx, eax, 0x12345678
+	%%wtl_left_pan_mul %+ repcnt EQU $ - 4
+	imul eax, 0x12345678
+	%%wtl_right_pan_mul %+ repcnt EQU $ - 4
+	sar edx, 8
+	sar eax, 8
+	store_sample %1, 0, edx
+	store_sample %1, 4, eax
+
+	%endif
+
+	%else
+
+	;----------------------------------------------------------------------
+	; Nearest neighbour (zero-order hold) and linear interpolation.
+
 	%if (%4 = RENDER_IPOL_NN)
 
 	; Nearest neighbour interpolation: use nearest sample
@@ -1261,7 +1398,9 @@ mod_swt_get_mixer_info:
 	%%right_bitshift_ %+ repcnt EQU $ - 1
 	store_sample %1, 4, eax
 
-	%endif
+	%endif				; RENDER_PAN
+
+	%endif				; RENDER_IPOL
 
 	; Next sample
 
@@ -1293,7 +1432,7 @@ mod_swt_get_mixer_info:
 	mov [di + channel.sample_pos_int], eax
 
 	pop es
-	retn
+	retf
 
 	; ---------------------------------------------------------------------
 	; Jump table for partial rendering
@@ -1373,6 +1512,7 @@ mod_swt_get_mixer_info:
 	%endif
 
 %endmacro
+
 
 ;------------------------------------------------------------------------------
 ; Helper macro to save the rendered sample into the wavetable render buffer.
@@ -1598,6 +1738,9 @@ out_16bit_stereo_unsigned:
 ; <- Destroys everything except segment registers.
 ;------------------------------------------------------------------------------
 
+segment modplayer_nearest public use16 class=CODE align=16
+segment modplayer_nearest
+
 	align 4
 render_left_store:
 	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN
@@ -1629,6 +1772,9 @@ render_stereo_store:
 	align 4
 render_stereo_mix:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN
+
+segment modplayer_linear public use16 class=CODE align=16
+segment modplayer_linear
 
 ; Same for linear interpolation
 
@@ -1663,6 +1809,45 @@ render_stereo_store_lin:
 	align 4
 render_stereo_mix_lin:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN
+
+segment modplayer_watte public use16 class=CODE align=16
+segment modplayer_watte
+
+; Same for Watte tri-linear interpolation
+
+	align 4
+render_left_store_wtl:
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_WTL
+
+	align 4
+render_left_mix_wtl:
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_WTL
+
+	align 4
+render_right_store_wtl:
+	render_channel RENDER_STORE, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_WTL
+
+	align 4
+render_right_mix_wtl:
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_HARD, RENDER_IPOL_WTL
+
+	align 4
+render_leftx_mix_wtl:
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_X, RENDER_IPOL_WTL
+
+	align 4
+render_rightx_mix_wtl:
+	render_channel RENDER_ADD, RENDER_PAN_R, RENDER_PAN_X, RENDER_IPOL_WTL
+
+	align 4
+render_stereo_store_wtl:
+	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_WTL
+
+	align 4
+render_stereo_mix_wtl:
+	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_WTL
+
+segment modplayer
 
 
 ;------------------------------------------------------------------------------
@@ -1716,7 +1901,7 @@ mod_swt_render:
 	push di
 
 	movzx si, byte cs:[edx + esi]
-	call [cs:render_store_fn + si]
+	call far [cs:render_store_fn + si]
 	render_store_fn_addr EQU $ - 2
 
 	pop di
@@ -1745,7 +1930,7 @@ mod_swt_render:
 	push di
 
 	movzx si, byte cs:[edx + esi]
-	call [cs:render_mix_fn + si]
+	call far [cs:render_mix_fn + si]
 	render_mix_fn_addr EQU $ - 2
 
 	pop di
@@ -1767,7 +1952,7 @@ mod_swt_render:
 	push ebx
 
 	movzx si, byte cs:[edx + esi]
-	call [cs:render_mix_fn + si]
+	call far [cs:render_mix_fn + si]
 	render_mix_fn_last_addr EQU $ - 2
 
 	pop ebx
@@ -1841,7 +2026,7 @@ mod_swt_render_direct:
 	push di
 
 	movzx si, byte cs:[edx + esi]
-	call [cs:render_store_fn + si]
+	call far [cs:render_store_fn + si]
 	render_direct_store_fn_addr EQU $ - 2
 
 	pop di
@@ -1870,7 +2055,7 @@ mod_swt_render_direct:
 	push di
 
 	movzx si, byte cs:[edx + esi]
-	call [cs:render_mix_fn + si]
+	call far [cs:render_mix_fn + si]
 	render_direct_mix_fn_addr EQU $ - 2
 
 	pop di
@@ -1890,7 +2075,7 @@ mod_swt_render_direct:
 	inc si
 
 	movzx si, byte cs:[edx + esi]
-	call [cs:render_mix_fn + si]
+	call far [cs:render_mix_fn + si]
 	render_direct_mix_fn_last_addr EQU $ - 2
 
 .exit_render:
@@ -1924,44 +2109,65 @@ out_convert_fn	dw out_8bit_mono_signed
 		; channel (overwrites the render buffer) and render_mix_fn for
 		; further channels (adds to the render buffer).
 
-render_store_fn	dw render_left_store
-		dw render_right_store
-		dw render_left_store
-		dw render_right_store
-		dw render_stereo_store
+		alignb 4
+render_store_fn	dw render_left_store, modplayer_nearest
+		dw render_right_store, modplayer_nearest
+		dw render_left_store, modplayer_nearest
+		dw render_right_store, modplayer_nearest
+		dw render_stereo_store, modplayer_nearest
 
-render_mix_fn	dw render_left_mix
-		dw render_right_mix
-		dw render_left_mix
-		dw render_right_mix
-		dw render_stereo_mix
+render_mix_fn	dw render_left_mix, modplayer_nearest
+		dw render_right_mix, modplayer_nearest
+		dw render_left_mix, modplayer_nearest
+		dw render_right_mix, modplayer_nearest
+		dw render_stereo_mix, modplayer_nearest
 		RENDER_MIX_FN_LAST EQU $ - render_mix_fn
 
-		dw render_left_mix	; Mixing functions for last channel
-		dw render_right_mix
-		dw render_leftx_mix	; Crossfade is mixed differently
-		dw render_rightx_mix
-		dw render_stereo_mix
+		dw render_left_mix, modplayer_nearest
+		dw render_right_mix, modplayer_nearest
+		dw render_leftx_mix, modplayer_nearest
+		dw render_rightx_mix, modplayer_nearest
+		dw render_stereo_mix, modplayer_nearest
 
 		; Same for linear interpolation
 
-renlin_store_fn	dw render_left_store_lin
-		dw render_right_store_lin
-		dw render_left_store_lin
-		dw render_right_store_lin
-		dw render_stereo_store_lin
+renlin_store_fn	dw render_left_store_lin, modplayer_linear
+		dw render_right_store_lin, modplayer_linear
+		dw render_left_store_lin, modplayer_linear
+		dw render_right_store_lin, modplayer_linear
+		dw render_stereo_store_lin, modplayer_linear
 
-renlin_mix_fn	dw render_left_mix_lin
-		dw render_right_mix_lin
-		dw render_left_mix_lin
-		dw render_right_mix_lin
-		dw render_stereo_mix_lin
+renlin_mix_fn	dw render_left_mix_lin, modplayer_linear
+		dw render_right_mix_lin, modplayer_linear
+		dw render_left_mix_lin, modplayer_linear
+		dw render_right_mix_lin, modplayer_linear
+		dw render_stereo_mix_lin, modplayer_linear
 
-		dw render_left_mix_lin	; Mixing functions for last channel
-		dw render_right_mix_lin
-		dw render_leftx_mix_lin	; Crossfade is mixed differently
-		dw render_rightx_mix_lin
-		dw render_stereo_mix_lin
+		dw render_left_mix_lin, modplayer_linear
+		dw render_right_mix_lin, modplayer_linear
+		dw render_leftx_mix_lin, modplayer_linear
+		dw render_rightx_mix_lin, modplayer_linear
+		dw render_stereo_mix_lin, modplayer_linear
+
+		; Same for Watte tri-linear interpolation
+
+renwtl_store_fn	dw render_left_store_wtl, modplayer_watte
+		dw render_right_store_wtl, modplayer_watte
+		dw render_left_store_wtl, modplayer_watte
+		dw render_right_store_wtl, modplayer_watte
+		dw render_stereo_store_wtl, modplayer_watte
+
+renwtl_mix_fn	dw render_left_mix_wtl, modplayer_watte
+		dw render_right_mix_wtl, modplayer_watte
+		dw render_left_mix_wtl, modplayer_watte
+		dw render_right_mix_wtl, modplayer_watte
+		dw render_stereo_mix_wtl, modplayer_watte
+
+		dw render_left_mix_wtl, modplayer_watte
+		dw render_right_mix_wtl, modplayer_watte
+		dw render_leftx_mix_wtl, modplayer_watte
+		dw render_rightx_mix_wtl, modplayer_watte
+		dw render_stereo_mix_wtl, modplayer_watte
 
 		; Lookup table for render function indexes for various stereo
 		; output modes. Must be aligned with MOD_PAN_* constants!
@@ -1978,17 +2184,17 @@ monotab:	; MOD_PAN_MONO: Mix everything to left channel
 
 hardpantab:	; MOD_PAN_HARD: Left - Right - Right - Left
 		%rep ((MOD_MAX_CHANS + 3) / 4)
-		db 0, 2, 2, 0
+		db 0, 4, 4, 0
 		%endrep
 
 xpantab:	; MOD_PAN_CROSS: Left - Right - Right - Left
 		%rep ((MOD_MAX_CHANS + 3) / 4)
-		db 4, 6, 6, 4
+		db 8, 12, 12, 8
 		%endrep
 
 realpantab:	; MOD_PAN_REAL: Use real stereo mixer based on panning effect
 		%rep MOD_MAX_CHANS
-		db 8
+		db 16
 		%endrep
 
 

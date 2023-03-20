@@ -14,6 +14,8 @@ struc		channel
 
 .sample_pos_int	resd 1			; Sample playback position
 .speed_int	resd 1			; Integer part of playback speed
+.left_pan_mul	resd 1			; Left channel pan multiplier
+.right_pan_mul	resd 1			; Left channel pan multiplier
 .sample_hdr_ofs	resw 1			; Sample data
 .sample_pos_fr	resw 1			; Fractional part of sample position
 .speed_fr	resw 1			; Fractional part of playback speed
