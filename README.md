@@ -2,7 +2,7 @@
 
 This is the modern remake of a multichannel [MOD](https://en.wikipedia.org/wiki/MOD_(file_format)) player I wrote back in the mid-90's for retro PC platforms. Why? Because programming for limited hardware with direct control over it is a challenging, but rewarding fun. Also this old modplayer of mine was lost back in the day in a sad hard drive accident and burned a hole in my heart. So it was about time to rebuild it and make it even better than it ever was to heal my wounds finally.
 
-It requires a 386 or above running MS-DOS or Windows 9x/ME, or an emulator such as DOSBox. It is written in full assembly using [PMI, my own 32-bit protected mode host](/a11599/pmi). The MOD player supports ProTracker format and its close derivates up to 32 channels on the following sound cards:
+It requires a 386 or above running MS-DOS or Windows 9x/ME, or an emulator such as DOSBox. It is written in full assembly using [PMI, my own 32-bit protected mode host](https://github.com/a11599/pmi). The MOD player supports ProTracker format and its close derivates up to 32 channels on the following sound cards:
 
 - No sound (keeps the player running without actually playing anything)
 - PC speaker up to 29 kHz sample rate
@@ -36,7 +36,7 @@ Download and install the dependencies, then:
 - Copy `makeinit.sam` to `makeinit` and set correct paths for `nasm.exe` (NASM command line compiler) and `wlink.exe` (Watcom linker). Normally you don't need to change the path to `wlink.exe` as long as its available in `PATH`.
 - Copy `test_bat.sam` to `test.bat` and adjust `file` and `args` environment variables according to your testing requirements. `file` should point to a MOD file and `args` contains parameters to the player. Run `tmodplay /h` to display the available command line parameters.
 - (optional) When using DOSBox-X for development on a modern PC, copy `emu\env_bat.sam` to `emu\env.bat` and adjust the path of `dosbox-x.exe` in the file to your actual install directory.
-- Download [PMI](/a11599/pmi) and extract it into the same parent as of tmodplay. The folder structure should look like this:
+- Download [PMI](https://github.com/a11599/pmi) and extract it into the same parent as of tmodplay. The folder structure should look like this:
 
 ```
   |
