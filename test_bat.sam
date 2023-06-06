@@ -5,4 +5,4 @@ rem make.bat or makedb.bat.
 
 set file=dist\mod\generatr.mod
 set args=/sr:50000
-dist\tmodplay %file% %args%
+bin\tmod_dbg %file% %args%

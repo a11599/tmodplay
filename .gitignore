@@ -1,7 +1,5 @@
-dist
-obj
-scratch
-makeinit
-test.bat
-emu/env.bat
-emu/dosbox.log
+/bin
+/obj
+/makeinit
+/test.bat
+/emu/env.bat

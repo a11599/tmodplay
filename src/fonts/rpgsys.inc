@@ -3,7 +3,7 @@
 		; Changes:
 		; - Numbers monospaced
 		; - "&" character added
-		; - "f", "j" changed slightly
+		; - "%", "f", "j" changed slightly
 
 		align 2
 
@@ -167,13 +167,13 @@ font_rpgsystem:
 
 .glyph_037	db 2, 10, 9, 3
 		db 01100000b, 11000000b
-		db 11010001b, 10000000b
-		db 10110011b, 00000000b
-		db 01110110b, 00000000b
+		db 10010001b, 10000000b
+		db 10010011b, 00000000b
+		db 01100110b, 00000000b
 		db 00001100b, 00000000b
-		db 00011011b, 10000000b
-		db 00110011b, 01000000b
-		db 01100010b, 11000000b
+		db 00011001b, 10000000b
+		db 00110010b, 01000000b
+		db 01100010b, 01000000b
 		db 11000001b, 10000000b
 ;&
 .glyph_038	db 2, 9, 9, 3

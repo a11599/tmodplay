@@ -1,7 +1,7 @@
 ;==============================================================================
-; MOD player - software wavetable
+; MOD player - Software wavetable
 ;------------------------------------------------------------------------------
-; Implements software mixing up to 32 channels. The aim is to replicate
+; Implements software mixing for non-wavetable devices. The aim is to replicate
 ; Gravis Ultrasound-like capabilities in software to the extent required by
 ; MOD playback.
 ;------------------------------------------------------------------------------
@@ -25,22 +25,66 @@
 ; Performance scales linearly with sample rate.
 ;==============================================================================
 
-cpu 386
+	cpu 386
 
-%include "system/api/memory.inc"
-%include "mod/structs/global.inc"
-%include "mod/consts/out.inc"
-%include "mod/consts/wtbl_sw.inc"
-%include "mod/structs/wtbl_sw.inc"
-%include "debug/log.inc"
+section .text
+
+%include "pmi/api/pmi.inc"
+%include "rtl/api/string.inc"
+%include "rtl/api/log.inc"
+
+%include "mod/config.inc"
+%include "mod/structs/public.inc"
+%include "mod/consts/dev.inc"
+%include "mod/structs/mod_file.inc"
 
 ; Shortcut macros for easier access to nested structures
 
-%define	state(var) mod.wt + mod_wtbl_sw. %+ var
 %define	sample(var) mod_sample. %+ var
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
+; Render macro operation control constants
+
+RENDER_STORE	EQU 0			; Overwrite buffer with sample (store)
+RENDER_ADD	EQU 1			; Mix sample to buffer (add)
+RENDER_PAN_L	EQU 0			; Primary channel = left
+RENDER_PAN_R	EQU 1			; Primary channel = right
+RENDER_PAN_HARD	EQU 0			; Hard left/right panning (Amiga style)
+RENDER_PAN_X	EQU 1			; Hard panning with 75% crossfade
+RENDER_PAN_REAL	EQU 2			; Real panning using channel pan value
+RENDER_IPOL_NN	EQU 0			; Nearest neighbour interpolation
+RENDER_IPOL_LIN	EQU 1			; Linear interpolation
+RENDER_IPOL_WTL	EQU 2			; Jon Watte tri-linear interpolation
+
+; Additional memory used to unroll sample for optimized mixer code. Unroll one
+; more to support an edge case with partial renders.
+
+UNROLL_SAMPLES	EQU (UNROLL_COUNT + 1) * UNROLL_MAX_SPD
+
+; Additional memory required at the beginning of each sample for the mixer code.
+
+SAMPLE_PADDING	EQU 1
+
+; Internal data structure for audio channel status.
+
+struc		channel
+
+.sample_pos_int	resd 1			; Sample playback position
+.speed_int	resd 1			; Integer part of playback speed
+.left_pan_mul	resd 1			; Left channel pan multiplier
+.right_pan_mul	resd 1			; Left channel pan multiplier
+.sample_hdr_ofs	resd 1			; Sample data
+.sample_pos_fr	resw 1			; Fractional part of sample position
+.speed_fr	resw 1			; Fractional part of playback speed
+.volume		resb 1			; Volume (0 - 64)
+.pan		resb 1			; Panning (0 - 255)
+.left_volume	resb 1			; Left channel volume (0 - 64)
+.left_bitshift	resb 1			; Left channel bitshift (0 - 5)
+.right_volume	resb 1			; Right channel volume (0 - 64)
+.right_bitshift	resb 1			; Right channel bitshift (0 - 5)
+		alignb 4
+.strucsize:
+
+endstruc
 
 
 ;------------------------------------------------------------------------------
@@ -49,18 +93,15 @@ segment modplayer
 ; -> AL - Interpolation mode (MOD_IPOL_*)
 ;    AH - Stereo rendering mode (MOD_PAN_*)
 ;    BH.BL - Amplification as 8.8 bit fixed point value
-;    CX - Size of the software wavetable render buffer
+;    ECX - Size of the software wavetable render buffer
 ;    DL - Output device bitstream format (FMT_* flags)
 ;    DH - Initial pan for real stereo mixing
-;    DS - Player instance segment
 ; <- CF - Set on error
 ;    EAX - Error code if CF set or number of extra samples that will be
 ;          generated at the end of each sample (must reserve enough space)
 ;    ECX - Number of extra samples that will be generated at the beginning of
 ;          each sample (must reserve enough space)
 ;------------------------------------------------------------------------------
-
-	align 4
 
 global mod_swt_setup
 mod_swt_setup:
@@ -71,272 +112,221 @@ mod_swt_setup:
 
 	call mod_swt_set_interpolation
 
-	mov [state(output_format)], dl
-	mov [state(amplify)], bx
+	mov [buffer_size], ecx
+	mov [output_format], dl
+	mov [amplify], bx
 
 	mov al, ah
 	call mod_swt_set_stereo_mode
 
-	push ecx
-
 	; Channel structure offset pointers
 
-	mov ax, state(channels)		; AX: start of channel[]
-	mov bx, state(channel_ofs)	; DS:BX: channel index table entry
-	mov cx, MOD_MAX_CHANS
+	mov eax, channels		; EAX: start of channel[]
+	mov ebx, channel_addr		; EBX: channel index table entry
+	mov ecx, MOD_MAX_CHANS
 
-	log {'Creating channel offset ptr[] @{X16}:{X16}', 13, 10}, ds, bx
+	log LOG_DEBUG, {'Creating channel offset ptr[] at 0x{X}', 13, 10}, ebx
 
-.loop_channel_ofs:
-	mov [bx], ax			; AX: channel data structure offset
-	add bx, 2
-	add ax, channel.strucsize	; Advance offset
-	dec cx
-	jnz .loop_channel_ofs
-
-	pop ecx
+.loop_channel_addr:
+	mov [ebx], eax			; AX: channel data structure offset
+	add ebx, 4
+	add eax, channel.strucsize	; Advance offset
+	dec ecx
+	jnz .loop_channel_addr
 
 	; Reset channels
 
 	call mod_swt_reset_channels
 
-	; Allocate memory for volume lookup table - keep in low memory so we
-	; can use direct offset reference to a segment address
-
-	log {'Allocating 33280 bytes for software wavetable volume table', 13, 10}
-
-	mov ebx, 65 * 256 * 2		; 1 word for 65 vols, 256 samples each
-	mov al, SYS_MEM_LO
-	call far sys_mem_alloc
-	jc .error
-	shr eax, 4
-	mov [state(voltab_seg)], ax
-
-	log {'Volume table allocated @{X16}:0000', 13, 10}, ax
-
-	; Allocate memory for linear interpolation lookup table - keep in low
-	; memory so we can use direct offset reference to a segment address
-
-	mov ebx, 1024 << LIN_IPOL_EXP	; 512 words for each step
-
-	log {'Allocating {u} bytes for software wavetable linear interpolation lookup table', 13, 10}, ebx
-
-	mov al, SYS_MEM_LO
-	call far sys_mem_alloc
-	jc .error
-	shr eax, 4
-	mov [state(ipoltab_seg)], ax
-
-	log {'Software wavetable linear interpolation lookup table allocated @{X16}:0000', 13, 10}, ax
-
 	; Allocate memory for render buffer
 
-	movzx ebx, cx
-	shl ebx, 3			; 8 bytes / buffer entry (32-bit stereo)
+	mov ecx, [buffer_size]
+	shl ecx, 3			; 8 bytes / buffer entry (32-bit stereo)
 	jz .init_voltab
 
-	log {'Allocating {u} bytes for software wavetable render buffer', 13, 10}, ebx
+	log LOG_DEBUG, {'Allocating {u} bytes for software wavetable render buffer', 13, 10}, ecx
 
-	mov al, SYS_MEM_HI_LO
-	call far sys_mem_alloc
+	mov al, PMI_MEM_HI_LO
+	call pmi(mem_alloc)
 	jc .error
-	mov [state(buffer_addr)], eax
+	mov [buffer_addr], eax
 
-	log {'Render buffer allocated @{X}', 13, 10}, eax
+	log LOG_DEBUG, {'Render buffer allocated at 0x{X}', 13, 10}, eax
 
 .init_voltab:
 
 	; Initialize volume lookup table
 
-	call mod_swt_init_voltab
+	call init_voltab
 
 	; Initialize linear interpolation lookup table
 
-	call mod_swt_init_ipoltab
+	call init_ipoltab
 
 	; Ready, return number of bytes required after each sample
 
-	log {'Software wavetable initialized', 13, 10}
+	log LOG_INFO, {'Software wavetable initialized', 13, 10}
 
 	mov eax, UNROLL_SAMPLES
 	mov ecx, SAMPLE_PADDING
 	clc
-	jmp .exit
-
-.error:
-	stc
 
 .exit:
 	pop ebx
-	retn
+	ret
+
+.error:
+	stc
+	jmp .exit
 
 
 ;------------------------------------------------------------------------------
 ; Shuts down the software wavetable.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;------------------------------------------------------------------------------
-
-	align 4
 
 global mod_swt_shutdown
 mod_swt_shutdown:
 	push eax
 
-	movzx eax, word [state(voltab_seg)]
-	test eax, eax
-	jz .free_ipoltab
-
-	log {'Disposing software wavetable volume table @{X16}:0000', 13, 10}, ax
-
-	shl eax, 4
-	call far sys_mem_free
-	mov word [state(voltab_seg)], 0
-
-.free_ipoltab:
-	movzx eax, word [state(ipoltab_seg)]
-	test eax, eax
-	jz .free_buffer
-
-	log {'Disposing software wavetable linear interpolation lookup table @{X16}:0000', 13, 10}, ax
-
-	shl eax, 4
-	call far sys_mem_free
-	mov word [state(ipoltab_seg)], 0
-
-.free_buffer:
-	mov eax, [state(buffer_addr)]
+	mov eax, [buffer_addr]
 	test eax, eax
 	jz .done
 
-	log {'Disposing software wavetable render buffer @{X}', 13, 10}, eax
+	log LOG_DEBUG, {'Disposing software wavetable render buffer at 0x{X}', 13, 10}, eax
 
-	call far sys_mem_free
-	mov dword [state(buffer_addr)], 0
+	call pmi(mem_free)
+	mov dword [buffer_addr], 0
 
 .done:
 	pop eax
-	retn
+	ret
+
+
+;------------------------------------------------------------------------------
+; Set the number of active channels.
+;------------------------------------------------------------------------------
+; -> AL - Number of channels
+;------------------------------------------------------------------------------
+
+global mod_swt_set_channels
+mod_swt_set_channels:
+	push eax
+
+	movzx eax, al
+	mov [num_channels], eax
+
+	pop eax
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Set the amplification level.
 ;------------------------------------------------------------------------------
 ; -> AH.AL - Amplification in 8.8 fixed point value
-;    DS - Player instance segment
+; <- AH.AL - Actual audio amplification level
 ;------------------------------------------------------------------------------
-
-	align 4
 
 global mod_swt_set_amplify
 mod_swt_set_amplify:
-	cmp ax, [state(amplify)]
+	cmp ax, [amplify]
 	je .exit
 
-	mov [state(amplify)], ax
-	call mod_swt_init_voltab
+	cmp ax, 0x0400
+	jbe .update_voltab
+	mov ax, 0x0400
+
+.update_voltab:
+	mov [amplify], ax
+	call init_voltab
 
 .exit:
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Set sample interpolation.
 ;------------------------------------------------------------------------------
 ; -> AL - Sample interpolation method (MOD_IPOL_*)
-;    DS - Player instance segment
 ;------------------------------------------------------------------------------
-
-	align 4
 
 global mod_swt_set_interpolation
 mod_swt_set_interpolation:
-	push bx
-	push cx
+	push ebx
+	push ecx
 
-	mov cx, render_store_fn
-	mov bx, render_mix_fn
+	mov ecx, render_store_fn
+	mov ebx, render_mix_fn
 	cmp al, 1
 	jb .set_render_fns
-	mov cx, renlin_store_fn
-	mov bx, renlin_mix_fn
+	mov ecx, renlin_store_fn
+	mov ebx, renlin_mix_fn
 	je .set_render_fns
-	mov cx, renwtl_store_fn
-	mov bx, renwtl_mix_fn
+	mov ecx, renwtl_store_fn
+	mov ebx, renwtl_mix_fn
 
 .set_render_fns:
-	mov cs:[render_store_fn_addr], cx
-	mov cs:[render_direct_store_fn_addr], cx
-	mov cs:[render_mix_fn_addr], bx
-	mov cs:[render_direct_mix_fn_addr], bx
-	add bx, RENDER_MIX_FN_LAST
-	mov cs:[render_mix_fn_last_addr], bx
-	mov cs:[render_direct_mix_fn_last_addr], bx
+	mov [render_store_fn_addr], ecx
+	mov [render_direct_store_fn_addr], ecx
+	mov [render_mix_fn_addr], ebx
+	mov [render_direct_mix_fn_addr], ebx
+	add ebx, RENDER_MIX_FN_LAST
+	mov [render_mix_fn_last_addr], ebx
+	mov [render_direct_mix_fn_last_addr], ebx
 
-	pop cx
-	pop bx
-	retn
+	pop ecx
+	pop ebx
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Set stereo rendering mode.
 ;------------------------------------------------------------------------------
 ; -> AL - Stereo rendering mode
-;    DS - Player instance segment
 ;------------------------------------------------------------------------------
-
-	align 4
 
 global mod_swt_set_stereo_mode
 mod_swt_set_stereo_mode:
 	push eax
 
-	test byte [state(output_format)], FMT_STEREO
+	test byte [output_format], FMT_STEREO
 	jnz .set_pantab_base
 	xor al, al
 
 .set_pantab_base:
 	movzx eax, al
-	movzx eax, word cs:[modpantab + eax * 2]
-	mov cs:[render_pantab_base], eax
-	mov cs:[render_direct_pantab_base], eax
+	mov eax, [modpantab + eax * 4]
+	mov [render_pantab_base], eax
+	mov [render_direct_pantab_base], eax
 
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Initialize the renderer's volume lookup table.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;------------------------------------------------------------------------------
 
-	align 4
-
-mod_swt_init_voltab:
+init_voltab:
 	push eax
 	push ebx
 	push ecx
 	push edx
 	push esi
-	push di
-	push es
+	push edi
 
 	cld
 
-	mov es, [state(voltab_seg)]	; ES: volume table segment
-
 	; Limit amplification to prevent overflow and excessive clipping.
 
-	movzx ebx, word [state(amplify)]
-	cmp bx, 0x0400
+	movzx ebx, word [amplify]
+	cmp ebx, 0x0400
 	jbe .init_voltab
-	mov bx, 0x0400
+	mov ebx, 0x0400
 
 .init_voltab:
-	xor di, di			; ES:DI: volume table
+	mov edi, voltab			; EDI: volume table
 
-	log {'Initializing volume table @{X16}:0000, amplification: {q16:256.2}x', 13, 10}, es, bx
+	log LOG_DEBUG, {'Initializing volume table, amplification: {q16:256.2}x', 13, 10}, bx
 
 	; Initialize mixer volume table. The table consists of 256 word values
 	; for each of the 65 possible volumes (0 - 64).
@@ -353,13 +343,11 @@ mod_swt_init_voltab:
 	; EBX: amplification
 	; ECX: volume
 	; EDX: sample value scaling multiplier
-	; ES:DI: volume table entry address
-	; (E)SI: sample value
+	; EDI: volume table entry address
+	; ESI: sample value
 
 	inc ecx				; ECX: volume
 	xor eax, eax
-
-	align 4
 
 .loop_volume:
 	xor esi, esi			; ESI: sample value, -128 - 127
@@ -382,53 +370,43 @@ mod_swt_init_voltab:
 	; To ensure correct order in the volume table, go from 0 - 127, then
 	; -128 - -1.
 
-	inc si				; Next sample value
+	inc esi				; Next sample value
 	jz .next_vol
-	cmp si, 127
+	cmp esi, 127
 	jle .loop_scale_sample
-	mov si, -128
+	mov esi, -128
 	jmp .loop_scale_sample
 
-	align 4
-
 .next_vol:
-	inc cl				; Next volume
-	cmp cl, 64
+	inc ecx				; Next volume
+	cmp ecx, 64
 	jbe .loop_volume
 
 .exit:
-	pop es
-	pop di
+	pop edi
 	pop esi
 	pop edx
 	pop ecx
 	pop ebx
 	pop eax
-	clc
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Initialize the renderer's linear interpolation lookup table.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;------------------------------------------------------------------------------
 
-	align 4
-
-mod_swt_init_ipoltab:
+init_ipoltab:
 	push eax
 	push ebx
 	push ecx
 	push edx
 	push esi
-	push di
-	push es
+	push edi
 
 	cld
 
-	mov es, [state(ipoltab_seg)]	; ES: linear interpolation table segment
-	xor di, di			; ES:DI: linear interpolation table
+	mov edi, ipoltab		; EDI: linear interpolation table
 
 	; Calculate fractional values for sample differences. The table consists
 	; of 2^LIN_IPOL_EXP rows, where each row contains 256 words for
@@ -441,123 +419,112 @@ mod_swt_init_ipoltab:
 	; the fractional part's most significant bits go into bits
 	; 9-(8 + LIN_IPOL_EXP).
 
-	mov cx, 1 << LIN_IPOL_EXP	; Calculate interpolation steps
-	xor si, si			; Current interpolation step
+	mov ecx, 1 << LIN_IPOL_EXP	; Calculate interpolation steps
+	xor esi, esi			; Current interpolation step
 
-	log {'Initializing {u16}x linear interpolation lookup table @{X16}:0000', 13, 10}, cx, es
+	log LOG_DEBUG, {'Initializing {u16}x linear interpolation lookup table', 13, 10}, cx
 
 .loop_samples:
-	xor bx, bx			; Current sample difference
+	xor ebx, ebx			; Current sample difference
 
 	; Calculate fractional values for positive range (0 -> 255).
 
 	align 4
 
 .loop_samples_pos:
-	mov ax, bx
-	imul si
-	sar ax, LIN_IPOL_EXP
-	adc ax, 0
+	mov eax, ebx
+	imul esi
+	sar eax, LIN_IPOL_EXP
+	adc eax, 0
 	stosw
-	inc bx
-	cmp bx, 255
+	inc ebx
+	cmp ebx, 255
 	jle .loop_samples_pos
-	mov bx, -255
+	mov ebx, -255
 
 	; Calculate fractional values for negative range (-255 -> 0).
 
 	align 4
 
 .loop_samples_neg:
-	mov ax, bx
-	imul si
-	sar ax, LIN_IPOL_EXP
-	adc ax, 0
+	mov eax, ebx
+	imul esi
+	sar eax, LIN_IPOL_EXP
+	adc eax, 0
 	stosw
-	inc bx
-	cmp bx, 0
+	inc ebx
+	cmp ebx, 0
 	jle .loop_samples_neg
 
-	inc si
-	dec cx
+	inc esi
+	dec ecx
 	jnz .loop_samples
 
-.exit:
-	pop es
-	pop di
+	pop edi
 	pop esi
 	pop edx
 	pop ecx
 	pop ebx
 	pop eax
-	clc
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Initialize an 8-bit PCM sample for use with the wavetable mixer.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;    DS:SI - Pointer to mod_sample structure containing the sample header
+; -> ESI - Pointer to mod_sample structure containing the sample header
 ; <- CF - Set on error
 ;    EAX - Error code if CF set or wavetable sample ID
 ;    DH - Set to 1 if the sample can be removed from RAM (wavetable has
 ;         own internal sample memory)
 ;------------------------------------------------------------------------------
 
-	align 4
-
 global mod_swt_upload_sample
 mod_swt_upload_sample:
 	push ebx
 	push ecx
 	push edi
-	push es
 	push edx
 	push esi
 
 	cld
 
-	xor ax, ax
-	mov es, ax			; ES: zeropage
-	mov edi, [si + sample(addr)]
+	mov edi, [esi + sample(addr)]
 	test edi, edi
 	jz .done			; No sample, nothing to do
 
 	; Fill padding area with zeroes to prevent clicks with Watte
 	; interpolation.
 
-	mov al, es:[edi + SAMPLE_PADDING]
+	mov al, [edi + SAMPLE_PADDING]
 	mov ecx, SAMPLE_PADDING
-	a32 rep stosb
+	rep stosb
 
 	; Unroll the sample: add extra samples to the end, so there is no need
 	; to worry about reaching the (loop) end of the sample in the unrolled
 	; render loop.
 
-	mov eax, [si + sample(addr)]
-	mov ebx, [si + sample(rpt_start)]
-	mov edx, [si + sample(rpt_len)]
+	mov eax, [esi + sample(addr)]
+	mov ebx, [esi + sample(rpt_start)]
+	mov edx, [esi + sample(rpt_len)]
 
 	test edx, edx
 	jnz .unroll_looped_sample
 
 	; No sample repeat -> just fill zeroes after end of sample
 
-	mov edi, [si + sample(length)]
+	mov edi, [esi + sample(length)]
 	add edi, eax
 	xor eax, eax
 	%if (UNROLL_SAMPLES / 4 > 0)
 	mov ecx, UNROLL_SAMPLES / 4
-	a32 rep stosd
+	rep stosd
 	%endif
 	%if (UNROLL_SAMPLES % 4 > 0)
 	mov ecx, UNROLL_SAMPLES % 4
-	a32 rep stosb
+	rep stosb
 	%endif
 	jmp .done
-
-	align 4
 
 .unroll_looped_sample:
 
@@ -565,107 +532,94 @@ mod_swt_upload_sample:
 
 	add edx, ebx			; EDX: repeat end position
 	add edx, eax
-	mov edi, edx			; ES:EDI: sample repeat end position
-	mov esi, ebx			; ES:ESI: sample repeat start position
+	mov edi, edx			; EDI: sample repeat end position
+	mov esi, ebx			; ESI: sample repeat start position
 	add esi, eax
 	add ebx, eax			; EBX: repeat start position
-	mov cx, UNROLL_SAMPLES
+	mov ecx, UNROLL_SAMPLES
 
 	align 4
 
 .loop_unroll:
-	mov al, es:[esi]		; Unroll repeat loop
-	a32 stosb
+	mov al, [esi]			; Unroll repeat loop
+	stosb
 	inc esi
 	cmp esi, edx			; Wrap back to repeat start when needed
 	jb .next_sample
 	mov esi, ebx
 
 .next_sample:
-	dec cx
+	dec ecx
 	jnz .loop_unroll
 
 .done:
 	pop esi
 	pop edx
 
-	log {'Sample initialized for software wavetable', 13, 10}
+	log LOG_DEBUG, {'Sample initialized for software wavetable', 13, 10}
 
-	; Calculate address of sample relative to player instance segment and
-	; return it as wavetable ID
+	; Return start of sample after padding as wavetable ID
 
-	mov eax, [si + sample(addr)]
+	mov eax, [esi + sample(addr)]
 	test eax, eax
 	jz .no_sample
-	sub eax, [mod.instance_addr]
 	add eax, SAMPLE_PADDING
 
 .no_sample:
 	xor dh, dh
 	clc
 
-	pop es
 	pop edi
 	pop ecx
 	pop ebx
-	retn
+	clc
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Remove an 8-bit PCM sample from the wavetable mixer.
 ;------------------------------------------------------------------------------
 ; -> EAX - Sample wavetable ID
-;    DS - Player instance segment
-;    DS:SI - Pointer to mod_sample structure containing the sample header
+;    ESI - Pointer to mod_sample structure containing the sample header
 ; <- CF - Set on error
 ;    EAX - Error code if CF set
 ;------------------------------------------------------------------------------
 
-	align 4
-
 global mod_swt_free_sample
 mod_swt_free_sample:
 	clc
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Reset all channels of the software wavetable.
 ;------------------------------------------------------------------------------
 ; -> DH - Initial pan for real stereo mixing
-;    DS - Player instance segment
 ;------------------------------------------------------------------------------
-
-	align 4
 
 global mod_swt_reset_channels
 mod_swt_reset_channels:
 	push eax
-	push cx
-	push di
-	push ds
-	push es
-
-	mov ax, ds
-	mov es, ax
+	push ecx
+	push edi
 
 	cld
 
 	; Zero out channel[]
 
-	mov di, state(channels)
-	mov cx, channel.strucsize * MOD_MAX_CHANS / 4
+	mov edi, channels
+	mov ecx, channel.strucsize * MOD_MAX_CHANS / 4
 	xor eax, eax
 	rep stosd
 
 	; Initialize non-zero values
 
-	mov di, state(channels)
-	mov cx, MOD_MAX_CHANS
+	mov edi, channels
+	mov ecx, MOD_MAX_CHANS
 	xor al, al
 
 .loop_channels:
-	mov word [di + channel.sample_hdr_ofs], -1
+	mov dword [edi + channel.sample_hdr_ofs], 0
 	mov ah, dh
 	cmp al, 1
 	jb .set_default_pan
@@ -674,21 +628,19 @@ mod_swt_reset_channels:
 	not ah
 
 .set_default_pan:
-	mov byte [di + channel.pan], ah
+	mov byte [edi + channel.pan], ah
 
 	inc al
 	and al, 0x03
-	add di, channel.strucsize
-	dec cx
+	add edi, channel.strucsize
+	dec ecx
 	jnz .loop_channels
 
 .exit:
-	pop es
-	pop ds
-	pop di
-	pop cx
+	pop edi
+	pop ecx
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -696,40 +648,39 @@ mod_swt_reset_channels:
 ;------------------------------------------------------------------------------
 ; -> AL - Channel
 ;    AH - Mask bits
-;         bit 0: Set sample from DS:SI
-;         bit 1: Set playback position from CX.DX
-;    ECX.DX - Playback position as 16.16 bit fixed point number
-;    DS - Player instance segment
-;    DS:SI - Pointer to mod_sample structure containing the sample header. Set
-;            SI to -1 to stop playing in this channel.
+;         bit 0: Set sample from ESI
+;         bit 1: Set playback position from ECX.DX
+;    ECX.DX - Playback position as 32.16 bit fixed point number
+;    ESI - Pointer to mod_sample structure containing the sample header. Set
+;          to 0 to stop playing in this channel.
 ;------------------------------------------------------------------------------
 
 	align 4
 
 global mod_swt_set_sample
 mod_swt_set_sample:
-	push bx
+	push ebx
 	push edi
 
-	movzx edi, al			; DS:DI: wavetable channel structure
-	mov di, [state(channel_ofs) + edi * 2]
+	movzx edi, al			; EDI: wavetable channel structure
+	mov edi, [channel_addr + edi * 4]
 
 	; Save sample header pointer and requested playback position
 
 	test ah, 0x01			; Sample header pointer
 	jz .position
-	mov [di + channel.sample_hdr_ofs], si
+	mov [edi + channel.sample_hdr_ofs], esi
 
 .position:
 	test ah, 0x02			; Playback position
 	jz .exit
-	mov [di + channel.sample_pos_int], ecx
-	mov [di + channel.sample_pos_fr], dx
+	mov [edi + channel.sample_pos_int], ecx
+	mov [edi + channel.sample_pos_fr], dx
 
 .exit:
 	pop edi
-	pop bx
-	retn
+	pop ebx
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -739,11 +690,10 @@ mod_swt_set_sample:
 ;    AH - Mask bits
 ;         bit 0: Set volume to BL
 ;         bit 1: Set panning (balance) to BH
-;         bit 2: Set speed to CX:DX
+;         bit 2: Set speed to ECX.DX
 ;    BL - Volume (0 - 64)
 ;    BH - Panning (0 - 255; 0 = far left, 255 = far right)
-;    CX.DX - Playback speed as 16.16 fixed-point number
-;    DS - Player instance segment
+;    ECX.DX - Playback speed as 32.16 fixed-point number
 ;------------------------------------------------------------------------------
 
 	align 4
@@ -752,94 +702,85 @@ global mod_swt_set_mixer
 mod_swt_set_mixer:
 	push edi
 
-	movzx edi, al			; DS:EDI: wavetable channel structure
-	mov di, [state(channel_ofs) + edi * 2]
+	movzx edi, al			; EDI: wavetable channel structure
+	mov edi, [channel_addr + edi * 4]
 
 	; Set mixer values
 
 	test ah, 0x01			; Volume
 	jz .pan
-	mov [di + channel.volume], bl
+	mov [edi + channel.volume], bl
 
 .pan:
 	test ah, 0x02			; Pan
 	jz .panvol
-	mov [di + channel.pan], bh
+	mov [edi + channel.pan], bh
 
 .panvol:
-	test byte [state(output_format)], FMT_STEREO
+	test byte [output_format], FMT_STEREO
 	jz .speed
 
 	; Calculate pan volume and bitshift for real panning
 
-	push ax
-	push bx
-	push cx
-	push fs
-	push si
+	push eax
+	push ebx
+	push ecx
+	push esi
 
-	mov cx, modplayer_data
-	mov fs, cx			; FS: modplayer_data segment
-
-	mov al, [di + channel.volume]	; AL: volume (0 - 64)
-	mov bh, [di + channel.pan]	; BH: pan (0 - 255)
+	mov al, [edi + channel.volume]	; AL: volume (0 - 64)
+	mov bh, [edi + channel.pan]	; BH: pan (0 - 255)
 	call .calc_pan_volume
-	mov [di + channel.right_volume], ch
-	mov [di + channel.right_bitshift], cl
-	mov [di + channel.right_pan_mul], si
+	mov [edi + channel.right_volume], ch
+	mov [edi + channel.right_bitshift], cl
+	mov [edi + channel.right_pan_mul], esi
 	not bh				; BH: invert pan for left channel
 	call .calc_pan_volume
-	mov [di + channel.left_volume], ch
-	mov [di + channel.left_bitshift], cl
-	mov [di + channel.left_pan_mul], si
+	mov [edi + channel.left_volume], ch
+	mov [edi + channel.left_bitshift], cl
+	mov [edi + channel.left_pan_mul], esi
 
-	pop si
-	pop fs
-	pop cx
-	pop bx
-	pop ax
+	pop esi
+	pop ecx
+	pop ebx
+	pop eax
 
 .speed:
 	test ah, 0x04			; Playback speed
 	jz .exit
-	mov [di + channel.speed_int], cx
-	mov [di + channel.speed_fr], dx
+	mov [edi + channel.speed_int], ecx
+	mov [edi + channel.speed_fr], dx
 
 .exit:
 	pop edi
-	retn
+	ret
 
-;------------------------------------------------------------------------------
 ; Calculate volume and bitshift for real panning
-;------------------------------------------------------------------------------
 ; -> AL - Overall channel volume
 ;    BH - Panning
-;    FS - Segment of modplayer_data
 ; <- CL - Pan bitshift
 ;    CH - Left/right channel volume
-;    SI - Pan multiplier (0 - 256)
-;------------------------------------------------------------------------------
+;    ESI - Pan multiplier (0 - 256)
 
 	align 4
 
 .calc_pan_volume:
-	push ax
+	push eax
 	push ebx
-	push dx
+	push edx
 
 	xor cl, cl			; CL: pan bitshift
 	mov ch, al			; CH: channel volume
-	mov si, 0x100
+	mov esi, 0x100
 	cmp bh, 255
 	je .use_pan_volume
 
 	; Calculate panned volume using panning table
 
 	movzx ebx, bh
-	mov si, fs:[pantab + ebx * 2]
+	movzx esi, word [pantab + ebx * 2]
 	mov bl, al			; BX: sample (BH is already zero)
-	mov ax, si			; AX: pan ratio (16-bit)
-	shr si, 8			; SI: pan multiplier
+	mov eax, esi			; AX: pan ratio (16-bit)
+	shr esi, 8			; ESI: pan multiplier
 	mul bx
 	mov ch, dl
 	cmp dl, 32			; Panned volume >= 32: pan bitshift = 0
@@ -848,9 +789,9 @@ mod_swt_set_mixer:
 	; Calculate bitshift to improve accuracy of lower panned volume levels
 
 	movzx ebx, dl
-	mov cl, fs:[panshifttab + ebx]
+	mov cl, [panshifttab + ebx]
 	shld dx, ax, cl
-	shl ax, cl
+	shl eax, cl
 
 .round_pan_volume:
 
@@ -864,60 +805,53 @@ mod_swt_set_mixer:
 	mov ch, 64
 
 .use_pan_volume:
-	pop dx
+	pop edx
 	pop ebx
-	pop ax
-	retn
+	pop eax
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Add mixer information to mod_channel_info structure.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-; -> ES:EDI - Pointer to buffer receiving mod_channel_info structures
-; <- ES:EDI - Filled with data
+; -> BL - Number of channels
+;    ESI - Pointer to buffer receiving mod_channel_info structures
+; <- ESI - Filled with data
 ;------------------------------------------------------------------------------
-
-	align 4
 
 global mod_swt_get_mixer_info
 mod_swt_get_mixer_info:
 	push eax
-	push bx
-	push si
+	push ebx
+	push esi
 	push edi
 
-	mov bl, [mod.num_channels]
-	mov si, state(channels)
+	mov edi, channels
 
 .loop_channel:
-	mov eax, [si + channel.sample_pos_int]
-	mov es:[edi + mod_channel_info.sample_pos_int], eax
-	mov ax, [si + channel.sample_pos_fr]
-	mov es:[edi + mod_channel_info.sample_pos_fr], ax
+	mov eax, [edi + channel.sample_pos_int]
+	mov [esi + mod_channel_info.sample_pos_int], eax
+	mov ax, [edi + channel.sample_pos_fr]
+	mov [esi + mod_channel_info.sample_pos_fr], ax
 
-	add si, channel.strucsize
-	add edi, mod_channel_info.strucsize
+	add edi, channel.strucsize
+	add esi, mod_channel_info.strucsize
 	dec bl
 	jnz .loop_channel
 
 	pop edi
-	pop si
-	pop bx
+	pop esi
+	pop ebx
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Macro to render samples for a channel.
 ;------------------------------------------------------------------------------
 ; -> CX - Number of samples to render
-;    DS - Player instance segment
-;    DS:EBX - Render buffer pointer
-;    DS:DI - Wavetable channel structure
-;    ES - Player instance segment
-;    FS - Volume table segment
-;    GS - Linear interpolation lookup table segment
+;    EBX - Render buffer pointer
+;    EDI - Wavetable channel structure
 ;    %1 - Operation on render buffer (RENDER_STORE / RENDER_ADD)
 ;    %2 - Panning balance (RENDER_PAN_L / RENDER_PAN_R)
 ;    %3 - Panning operation (RENDER_PAN_X / RENDER_PAN_HARD / RENDER_PAN_REAL)
@@ -926,8 +860,6 @@ mod_swt_get_mixer_info:
 ;------------------------------------------------------------------------------
 
 %macro	render_channel 4
-
-	push es
 
 	; ---------------------------------------------------------------------
 	; Initialize renderer
@@ -944,59 +876,59 @@ mod_swt_get_mixer_info:
 
 	; Use high word of EBP for to-be rendered sample counter
 
-	movzx ebp, cx
-	dec ebp
+	mov ebp, ecx
 	shl ebp, 16
+	sub ebp, 0x10000
 
 %%setup_render:
 	push ebx
 
-	; DS:SI: sample header
+	; ESI: sample header
 
-	mov si, [di + channel.sample_hdr_ofs]
-	cmp si, -1
-	je %%no_sample
+	mov esi, [edi + channel.sample_hdr_ofs]
+	test esi, esi
+	jz %%no_sample
 
 	; Setup self-modifying code
 
-	mov eax, [di + channel.speed_int]
+	mov eax, [edi + channel.speed_int]
 	%assign repcnt 1
 	%rep UNROLL_COUNT		; Playback speed - integer part
-	mov cs:[%%speed_int_ %+ repcnt], eax
+	mov [%%speed_int_ %+ repcnt], eax
 	%assign repcnt repcnt + 1
 	%endrep
-	mov ax, [di + channel.speed_fr]
+	mov ax, [edi + channel.speed_fr]
 	%assign repcnt 1
 	%rep UNROLL_COUNT		; Playback speed - fractional part
-	mov cs:[%%speed_fr_ %+ repcnt], ax
+	mov [%%speed_fr_ %+ repcnt], ax
 	%assign repcnt repcnt + 1
 	%endrep
-	mov ebx, [si + sample(rpt_len)]
+	mov ebx, [esi + sample(rpt_len)]
 	test ebx, ebx			; Check if sample has repeat
 	jnz %%init_looped_sample
 
 	; Sample without loop
 
-	mov byte cs:[%%reset_sample_jmp_dest], %%stop_sample - %%reset_sample_jmp
-	mov eax, [si + sample(length)]
-	cmp [di + channel.sample_pos_int], eax
+	mov byte [%%reset_sample_jmp_dest], %%stop_sample - %%reset_sample_jmp
+	mov eax, [esi + sample(length)]
+	cmp [edi + channel.sample_pos_int], eax
 	jae %%no_sample			; Sample end reached
 	jmp %%init_sample_length
 
 	align 4
 
 %%init_looped_sample:
-	mov cs:[%%sample_rpt_len], ebx
-	mov byte cs:[%%reset_sample_jmp_dest], %%loop_sample - %%reset_sample_jmp
+	mov [%%sample_rpt_len], ebx
+	mov byte [%%reset_sample_jmp_dest], %%loop_sample - %%reset_sample_jmp
 	mov eax, ebx
-	add eax, [si + sample(rpt_start)]
+	add eax, [esi + sample(rpt_start)]
 	%if (%4 = RENDER_IPOL_WTL)
 	inc eax				; Click-prevention when wrapping back
 	%endif
 
 %%init_sample_length:
-	add eax, [si + sample(wt_id)]	; Relative to player instance
-	mov cs:[%%sample_length], eax	; Sample length or repeat end position
+	add eax, [esi + sample(wt_id)]	; Relative to player instance
+	mov [%%sample_length], eax	; Sample length or repeat end position
 
 	pop ecx				; Restore render buffer address
 	push esi
@@ -1005,38 +937,36 @@ mod_swt_get_mixer_info:
 	; Register usage during mixing
 
 	; EAX: sample value after amplification / temp
-	; FS:EBX: volume table lookup index
+	; EBX: volume table lookup index
 	; BL: sample value before amplification
 	; BH: left channel volume
-	; GS:ECX: linear interpolation table lookup index (CX: temp)
-	; FS:EDX: volume table lookup index for real panning / temp
+	; ECX: linear interpolation table lookup index (CX: temp)
+	; EDX: volume table lookup index for real panning / temp
 	; DL: sample value before amplification
 	; DH: right channel volume
 	; EBP high word: number of samples to render (counter) - 1
 	; BP: fractional sample position
-	; DS:ESI: sample position pointer
-	; DS:EDI: output render buffer pointer
-	; DS: player instance segment
-	; FS: volume table segment
+	; ESI: sample position pointer
+	; EDI: output render buffer pointer
 
 	%if (%4 = RENDER_IPOL_WTL)
 
 	; Volume and panning constants for Watte interpolation
 
-	mov al, [di + channel.volume]
+	mov al, [edi + channel.volume]
 	%assign repcnt 1
 	%rep UNROLL_COUNT		; Volume for Watte interpolation
-	mov cs:[%%wtl_volume %+ repcnt], al
+	mov [%%wtl_volume %+ repcnt], al
 	%assign repcnt repcnt + 1
 	%endrep
 
 	%if (%3 = RENDER_PAN_REAL)
-	mov eax, [di + channel.left_pan_mul]
-	mov ebx, [di + channel.right_pan_mul]
+	mov eax, [edi + channel.left_pan_mul]
+	mov ebx, [edi + channel.right_pan_mul]
 	%assign repcnt 1
 	%rep UNROLL_COUNT		; Panning ratio for Watte interpolation
-	mov cs:[%%wtl_left_pan_mul %+ repcnt], eax
-	mov cs:[%%wtl_right_pan_mul %+ repcnt], ebx
+	mov [%%wtl_left_pan_mul %+ repcnt], eax
+	mov [%%wtl_right_pan_mul %+ repcnt], ebx
 	%assign repcnt repcnt + 1
 	%endrep
 	%endif
@@ -1047,37 +977,37 @@ mod_swt_get_mixer_info:
 
 	%if (%3 = RENDER_PAN_REAL)
 
-	mov al, [di + channel.left_bitshift]
+	mov al, [edi + channel.left_bitshift]
 	%assign repcnt 1
 	%rep UNROLL_COUNT		; Left sample bitshift for real panning
-	mov cs:[%%left_bitshift_ %+ repcnt], al
+	mov [%%left_bitshift_ %+ repcnt], al
 	%assign repcnt repcnt + 1
 	%endrep
 
-	mov al, [di + channel.right_bitshift]
+	mov al, [edi + channel.right_bitshift]
 	%assign repcnt 1
 	%rep UNROLL_COUNT		; Right sample bitshift for real panning
-	mov cs:[%%right_bitshift_ %+ repcnt], al
+	mov [%%right_bitshift_ %+ repcnt], al
 	%assign repcnt repcnt + 1
 	%endrep
 
-	movzx ebx, byte [di + channel.left_volume]
+	movzx ebx, byte [edi + channel.left_volume]
 	shl ebx, 8
-	movzx edx, byte [di + channel.right_volume]
+	movzx edx, byte [edi + channel.right_volume]
 	shl edx, 8
 
 	%else				; RENDER_PAN_REAL
 
-	movzx ebx, byte [di + channel.volume]
+	movzx ebx, byte [edi + channel.volume]
 	shl ebx, 8
 
 	%endif
 
 	%endif
 
-	mov bp, [di + channel.sample_pos_fr]
-	mov eax, [di + channel.sample_pos_int]
-	add eax, [si + sample(wt_id)]
+	mov bp, [edi + channel.sample_pos_fr]
+	mov eax, [edi + channel.sample_pos_int]
+	add eax, [esi + sample(wt_id)]
 	mov edi, ecx
 	mov esi, eax
 	xor ecx, ecx
@@ -1096,7 +1026,7 @@ mod_swt_get_mixer_info:
 
 	mov eax, ebp
 	shr eax, 16
-	jmp [cs:%%render_cnt_tab + eax * 2]
+	jmp [%%render_cnt_tab + eax * 4]
 
 	; ---------------------------------------------------------------------
 	; Handle end of sample scenarios (kept close to %%loop_render_unrolled
@@ -1123,9 +1053,9 @@ mod_swt_get_mixer_info:
 	push esi
 	push edi
 
-	mov bp, [di + channel.sample_pos_fr]
-	mov eax, [si + sample(wt_id)]
-	add eax, [di + channel.sample_pos_int]
+	mov bp, [edi + channel.sample_pos_fr]
+	mov eax, [esi + sample(wt_id)]
+	add eax, [edi + channel.sample_pos_int]
 	mov esi, eax
 	mov edi, ecx
 
@@ -1136,14 +1066,12 @@ mod_swt_get_mixer_info:
 
 	mov ecx, ebp
 	shr ecx, 16
-	inc cx
-	add cx, cx
+	inc ecx
+	add ecx, ecx
 	jz %%done
 
-	mov ax, ds
-	mov es, ax
 	xor eax, eax
-	a32 rep stosd
+	rep stosd
 
 	%endif
 
@@ -1210,7 +1138,7 @@ mod_swt_get_mixer_info:
 	; Watte on the other hand operates in 16-bit domain. Not only because
 	; it's the high quality resampler, but because it can produce overshoot
 	; (the interpolated sample may exceed the 8-bit range). Extending the
-	; volume lookup table (which is already over 32 KB) was no-go and
+	; volume lookup table (which is already over 32 KB) was a no-go and
 	; clipping the oversampled value to 8-bits was slow and causes nasty
 	; artefacts, something i really don't want from a HQ resampler. Watte
 	; needs two multiplications for the calculation of the interpolated
@@ -1242,23 +1170,23 @@ mod_swt_get_mixer_info:
 	push edi
 
 	mov edx, [esi - 1]		; [-1][0][1][2]
-	mov ebx, 0x1200			; FS:EBX: index into volume table
+	mov ebx, 0x1200			; EBX: index into volume table
 	%%wtl_volume %+ repcnt EQU $ - 3
 	rol edx, 8			; [2][-1][0][1]
 	mov bl, dl			; [2]
-	movsx eax, word fs:[ebx * 2]	; EAX: y[2]
+	movsx eax, word [voltab + ebx * 2] ; EAX: y[2]
 	mov bl, dh			; [-1]
-	movsx ecx, word fs:[ebx * 2]	; ECX: y[-1]
+	movsx ecx, word [voltab + ebx * 2] ; ECX: y[-1]
 	shr edx, 16			; [0][1], EDX high word 0
 	mov bl, dl			; [0]
 	add ecx, eax			; ECX: ym1py2 = y[-1] + y[2]
-	movsx eax, word fs:[ebx * 2]	; EAX: c0 = y[0]
+	movsx eax, word [voltab + ebx * 2] ; EAX: c0 = y[0]
 	mov bl, dh			; [1]
 	sub ecx, eax			; ECX: ym1py2 - y[0]
 	lea edi, [ecx + eax * 2]	; EDI: y[0] + ym1py2
 	mov dx, bp
-	movsx ebx, word fs:[ebx * 2]	; EBX: y[1]
-	shr dx, (16 - WATTE_IPOL_EXP)	; EDX: Fractional part for interpolation
+	movsx ebx, word [voltab + ebx * 2] ; EBX: y[1]
+	shr edx, (16 - WATTE_IPOL_EXP)	; EDX: Fractional part for interpolation
 	sub ecx, ebx			; ECX: c2 * 2 = ym1py2 - y[0] - y[1]
 	lea ebx, [ebx * 2 + ebx]	; EBX: 3 * y[1]
 	imul ecx, edx			; ECX: c2 * 2 * x
@@ -1334,21 +1262,18 @@ mod_swt_get_mixer_info:
 	; still sounds a lot better than using nearest neighbor for
 	; downsampling.
 
-	mov ax, bp			; Calculate interpolation index
-	shr ax, (7 - LIN_IPOL_EXP)
+	xor eax, eax			; Calculate interpolation index
+	mov ax, bp
+	shr eax, (7 - LIN_IPOL_EXP)
 	mov bl, ah
 	mov ax, [esi]			; Get current and next 8-bit samples
 	and bl, 0xfe			; BL: interpolation index
-	movsx cx, ah			; CX: Next 8-bit sample (sign-extend)
-	movsx ax, al			; AX: Current 8-bit sample (sign-extend)
-	sub cx, ax			; CX: Difference between samples (9-bit)
-	%if (%3 = RENDER_PAN_X)
-	and ecx, 0x01ff			; Crossfade mixer destroys ECX high word
-	%else
-	and cx, 0x01ff
-	%endif
+	movsx ecx, ah			; ECX: Next 8-bit sample (sign-extend)
+	movsx eax, al			; EAX: Current 8-bit sample (sign-extend)
+	sub ecx, eax			; ECX: Difference between samples (9-bit)
+	and ecx, 0x01ff
 	or ch, bl			; ECX: merge interpolation index
-	add ax, gs:[ecx * 2]		; Add interpolated difference
+	add ax, [ipoltab + ecx * 2]	; Add interpolated difference
 	mov bl, al			; Use interpolated sample value
 
 	%endif
@@ -1358,7 +1283,7 @@ mod_swt_get_mixer_info:
 	; Hard panning: render sample for primary channel, clear/skip other
 	; channel
 
-	movsx eax, word fs:[ebx * 2]
+	movsx eax, word [voltab + ebx * 2]
 	store_sample %1, pan_idx, 0
 	store_sample %1, sample_idx, eax
 
@@ -1371,7 +1296,7 @@ mod_swt_get_mixer_info:
 	; the rest of the buffer if nothing is playing in the last channel or
 	; the sample ends before the end of buffer.
 
-	movsx eax, word fs:[ebx * 2]
+	movsx eax, word [voltab + ebx * 2]
 	mov edx, [edi + pan_idx]	; EDX: ch2 hard pan sample
 	add eax, [edi + sample_idx]	; EAX: ch1 hard pan sample
 	lea ecx, [edx * 2 + edx]
@@ -1388,13 +1313,13 @@ mod_swt_get_mixer_info:
 	; Real panning: calculate panned channel sample value using volume table
 	; and a bitshift operation.
 
-	movsx eax, word fs:[ebx * 2]
-	sar ax, 0x12
+	movsx eax, word [voltab + ebx * 2]
+	sar eax, 0x12
 	%%left_bitshift_ %+ repcnt EQU $ - 1
 	mov dl, bl			; DL: sample value for right channel
 	store_sample %1, 0, eax
-	movsx eax, word fs:[edx * 2]
-	sar ax, 0x12
+	movsx eax, word [voltab + edx * 2]
+	sar eax, 0x12
 	%%right_bitshift_ %+ repcnt EQU $ - 1
 	store_sample %1, 4, eax
 
@@ -1427,12 +1352,11 @@ mod_swt_get_mixer_info:
 
 	; Update sample positions in wavetable channel structure.
 
-	mov [di + channel.sample_pos_fr], bp
-	sub eax, [si + sample(wt_id)]
-	mov [di + channel.sample_pos_int], eax
+	mov [edi + channel.sample_pos_fr], bp
+	sub eax, [esi + sample(wt_id)]
+	mov [edi + channel.sample_pos_int], eax
 
-	pop es
-	retf
+	ret
 
 	; ---------------------------------------------------------------------
 	; Jump table for partial rendering
@@ -1442,7 +1366,7 @@ mod_swt_get_mixer_info:
 %%render_cnt_tab:
 	%assign rendercnt 0
 	%rep UNROLL_COUNT
-	dw %%render_cnt_ %+ rendercnt
+	dd %%render_cnt_ %+ rendercnt
 	%assign rendercnt rendercnt + 1
 	%endrep
 
@@ -1454,10 +1378,10 @@ mod_swt_get_mixer_info:
 	; or the sample ends before the end of the render buffer.
 
 	shr ebp, 16
-	inc bp				; BP: number of samples left in buffer
-	mov bx, bp
+	inc ebp				; BP: number of samples left in buffer
+	mov ebx, ebp
 	jz %%done
-	shr bp, 4			; BP: number of samples / 16
+	shr ebp, 4			; BP: number of samples / 16
 	jz %%pan_x_rest
 
 %%pan_x_loop:
@@ -1483,7 +1407,7 @@ mod_swt_get_mixer_info:
 	%endrep
 
 	add edi, 8 * 16
-	dec bp
+	dec ebp
 	jnz %%pan_x_loop
 
 %%pan_x_rest:
@@ -1517,8 +1441,7 @@ mod_swt_get_mixer_info:
 ;------------------------------------------------------------------------------
 ; Helper macro to save the rendered sample into the wavetable render buffer.
 ;------------------------------------------------------------------------------
-; -> EAX - Rendered sample
-;    DS:EDI - Pointer to next entry in wavetable render buffer
+; -> EDI - Pointer to next entry in wavetable render buffer
 ;    %1 - Operation on render buffer (RENDER_STORE / RENDER_ADD)
 ;    %2 - Channel offset within render buffer where the sample shall be stored
 ;    %3 - Value to store/add
@@ -1544,9 +1467,7 @@ mod_swt_get_mixer_info:
 ;------------------------------------------------------------------------------
 ; -> CX - Number of samples to convert
 ;    EDI - Linear address of output device buffer
-;    DS - Player instance segment
-;    DS:ESI - Wavetable render buffer pointer
-;    ES - Player instance segment
+;    ESI - Wavetable render buffer pointer
 ;    %1 - Output device bitdepth (FMT_8BIT / FMT_16BIT)
 ;    %2 - Output device number of channels (FMT_MONO / FMT_STEREO)
 ;    %3 - Output device data format (FMT_SIGNED / FMT_UNSIGNED)
@@ -1558,9 +1479,9 @@ mod_swt_get_mixer_info:
 
 	; Setup registers for conversion
 
-	sub edi, [mod.instance_addr]	; DS:EDI: output device buffer
+	movzx ecx, cx
 	%if (%2 = FMT_STEREO)
-	add cx, cx			; Twice as many samples when stereo
+	add ecx, ecx			; Twice as many samples when stereo
 	%endif
 
 	; ---------------------------------------------------------------------
@@ -1572,8 +1493,10 @@ mod_swt_get_mixer_info:
 
 	; Get 32-bit sample from wavetable render buffer
 
-	a32 lodsd
-	%if (%2 = FMT_MONO)		; Mono: skip right channel
+	mov eax, [esi]
+	%if (%2 = FMT_MONO)
+	add esi, 8			; Mono: skip right channel
+	%else
 	add esi, 4
 	%endif
 
@@ -1605,7 +1528,8 @@ mod_swt_get_mixer_info:
 	mov [edi], ah
 	inc edi
 	%elif (%1 = FMT_16BIT)
-	a32 stosw
+	mov [edi], ax
+	add edi, 2
 	%endif
 
 	convert_buffer_next_sample
@@ -1649,16 +1573,19 @@ mod_swt_get_mixer_info:
 	align 4
 
 %%clip_unsigned:
+	%if (%1 = FMT_16BIT)
+	xor ebx, ebx
+	%endif
 	cmp eax, 0
-	setg al
-
+	setle bl
 	%if (%1 = FMT_8BIT)
-	neg al
-	a32 stosb
+	dec bl
+	mov [edi], bl
+	inc edi
 	%elif (%1 = FMT_16BIT)
-	xor ah, ah
-	neg ax
-	a32 stosw
+	dec ebx
+	mov [edi], bx
+	add edi, 2
 	%endif
 
 	convert_buffer_next_sample
@@ -1670,15 +1597,14 @@ mod_swt_get_mixer_info:
 ;------------------------------------------------------------------------------
 ; Helper macro to loop to next sample when converting to the output buffer.
 ;------------------------------------------------------------------------------
-; -> CX - Number of samples left to convert
+; -> ECX - Number of samples left to convert
 ;------------------------------------------------------------------------------
 
 %macro	convert_buffer_next_sample 0
 
-	dec cx
+	dec ecx
 	jnz .loop_buffer
-	add edi, [mod.instance_addr]
-	retn
+	ret
 
 %endmacro
 
@@ -1688,7 +1614,6 @@ mod_swt_get_mixer_info:
 ; bitdepth and channels.
 ;------------------------------------------------------------------------------
 ; -> CX - Number of samples to convert
-;    DS - Player instance segment
 ;    EDI - Linear address of output device buffer
 ; <- EDI - Linear address of output device buffer after last sample
 ;    Destroys everything except segment registers.
@@ -1738,9 +1663,6 @@ out_16bit_stereo_unsigned:
 ; <- Destroys everything except segment registers.
 ;------------------------------------------------------------------------------
 
-segment modplayer_nearest public use16 class=CODE align=16
-segment modplayer_nearest
-
 	align 4
 render_left_store:
 	render_channel RENDER_STORE, RENDER_PAN_L, RENDER_PAN_HARD, RENDER_IPOL_NN
@@ -1772,9 +1694,6 @@ render_stereo_store:
 	align 4
 render_stereo_mix:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_NN
-
-segment modplayer_linear public use16 class=CODE align=16
-segment modplayer_linear
 
 ; Same for linear interpolation
 
@@ -1810,9 +1729,6 @@ render_stereo_store_lin:
 render_stereo_mix_lin:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_LIN
 
-segment modplayer_watte public use16 class=CODE align=16
-segment modplayer_watte
-
 ; Same for Watte tri-linear interpolation
 
 	align 4
@@ -1847,14 +1763,11 @@ render_stereo_store_wtl:
 render_stereo_mix_wtl:
 	render_channel RENDER_ADD, RENDER_PAN_L, RENDER_PAN_REAL, RENDER_IPOL_WTL
 
-segment modplayer
-
 
 ;------------------------------------------------------------------------------
 ; Render audio into the output device buffer.
 ;------------------------------------------------------------------------------
 ; -> CX - Number of samples to render
-;    DS - Player instance segment
 ;    EDI - Linear address of output device buffer
 ; <- EDI - Linear address of output device buffer after last rendered sample
 ;    Destroys everything except segment registers.
@@ -1869,49 +1782,40 @@ mod_swt_render:
 	test cx, cx
 	jz .exit
 
-	push es
-	push fs
-	push gs
-	mov ax, ds
-	mov es, ax
-	mov fs, [state(voltab_seg)]
-	mov gs, [state(ipoltab_seg)]
-
 	; ---------------------------------------------------------------------
 	; Render samples to wavetable render buffer
 
-	push cx
+	push ecx
 	push edi
 
-	movzx eax, byte [mod.num_channels]
+	mov eax, [num_channels]
 	xor esi, esi
-	mov di, state(channels)
-	mov ebx, [state(buffer_addr)]
-	sub ebx, [mod.instance_addr]
+	mov edi, channels
+	mov ebx, [buffer_addr]
 	mov edx, 0x12345678
 	render_pantab_base EQU $ - 4
 
 	; Render first channel (store rendered samples)
 
-	push ax
+	push eax
 	push ebx
-	push cx
+	push ecx
 	push edx
 	push esi
-	push di
+	push edi
 
-	movzx si, byte cs:[edx + esi]
-	call far [cs:render_store_fn + si]
-	render_store_fn_addr EQU $ - 2
+	movzx esi, byte [edx + esi]
+	call [render_store_fn + esi]
+	render_store_fn_addr EQU $ - 4
 
-	pop di
+	pop edi
 	pop esi
 	pop edx
-	pop cx
+	pop ecx
 	pop ebx
-	pop ax
+	pop eax
 
-	add di, channel.strucsize
+	add edi, channel.strucsize
 	dec al
 	jz .exit_render			; Single-channel, stop rendering
 	dec al
@@ -1920,60 +1824,56 @@ mod_swt_render:
 	; Render additional channels (add rendered samples)
 
 .loop_channels:
-	inc si
+	inc esi
 
-	push ax
+	push eax
 	push ebx
-	push cx
+	push ecx
 	push edx
 	push esi
-	push di
+	push edi
 
-	movzx si, byte cs:[edx + esi]
-	call far [cs:render_mix_fn + si]
-	render_mix_fn_addr EQU $ - 2
+	movzx esi, byte [edx + esi]
+	call [render_mix_fn + esi]
+	render_mix_fn_addr EQU $ - 4
 
-	pop di
+	pop edi
 	pop esi
 	pop edx
-	pop cx
+	pop ecx
 	pop ebx
-	pop ax
+	pop eax
 
-	add di, channel.strucsize
+	add edi, channel.strucsize
 	dec al
 	jnz .loop_channels
 
 	; Render last channel (add rendered samples and cross-fade if needed)
 
 .last_channel:
-	inc si
+	inc esi
 
 	push ebx
 
-	movzx si, byte cs:[edx + esi]
-	call far [cs:render_mix_fn + si]
-	render_mix_fn_last_addr EQU $ - 2
+	movzx esi, byte [edx + esi]
+	call [render_mix_fn + esi]
+	render_mix_fn_last_addr EQU $ - 4
 
 	pop ebx
 
 .exit_render:
 	pop edi
-	pop cx
+	pop ecx
 
 	; ---------------------------------------------------------------------
 	; Convert samples from wavetable render buffer to output buffer
 
 	mov esi, ebx
-	movzx ebx, byte [state(output_format)]
-	call [cs:out_convert_fn + ebx * 2]
-
-	pop gs
-	pop fs
-	pop es
+	movzx ebx, byte [output_format]
+	call [out_convert_fn + ebx * 4]
 
 .exit:
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1981,7 +1881,6 @@ mod_swt_render:
 ; internal rendering format.
 ;------------------------------------------------------------------------------
 ; -> CX - Number of samples to render
-;    DS - Player instance segment
 ;    EDI - Linear address of output device buffer
 ; <- Destroys everything except segment registers and EDI.
 ;------------------------------------------------------------------------------
@@ -1995,48 +1894,39 @@ mod_swt_render_direct:
 	test cx, cx
 	jz .exit
 
-	push es
-	push fs
-	push gs
 	push edi
-
-	mov ax, ds
-	mov es, ax
-	mov fs, [state(voltab_seg)]
-	mov gs, [state(ipoltab_seg)]
 
 	; ---------------------------------------------------------------------
 	; Render samples to output device buffer
 
 	mov ebx, edi
-	sub ebx, [mod.instance_addr]
-	movzx eax, byte [mod.num_channels]
+	mov eax, [num_channels]
 	xor esi, esi
-	mov di, state(channels)
+	mov edi, channels
 	mov edx, 0x12345678
 	render_direct_pantab_base EQU $ - 4
 
 	; Render first channel (store rendered samples)
 
-	push ax
+	push eax
 	push ebx
-	push cx
+	push ecx
 	push edx
 	push esi
-	push di
+	push edi
 
-	movzx si, byte cs:[edx + esi]
-	call far [cs:render_store_fn + si]
-	render_direct_store_fn_addr EQU $ - 2
+	movzx esi, byte [edx + esi]
+	call [render_store_fn + esi]
+	render_direct_store_fn_addr EQU $ - 4
 
-	pop di
+	pop edi
 	pop esi
 	pop edx
-	pop cx
+	pop ecx
 	pop ebx
-	pop ax
+	pop eax
 
-	add di, channel.strucsize
+	add edi, channel.strucsize
 	dec al
 	jz .exit_render			; Single-channel, stop rendering
 	dec al
@@ -2045,134 +1935,133 @@ mod_swt_render_direct:
 	; Render additional channels (add rendered samples)
 
 .loop_channels:
-	inc si
+	inc esi
 
-	push ax
+	push eax
 	push ebx
-	push cx
+	push ecx
 	push edx
 	push esi
-	push di
+	push edi
 
-	movzx si, byte cs:[edx + esi]
-	call far [cs:render_mix_fn + si]
-	render_direct_mix_fn_addr EQU $ - 2
+	movzx esi, byte [edx + esi]
+	call [render_mix_fn + esi]
+	render_direct_mix_fn_addr EQU $ - 4
 
-	pop di
+	pop edi
 	pop esi
 	pop edx
-	pop cx
+	pop ecx
 	pop ebx
-	pop ax
+	pop eax
 
-	add di, channel.strucsize
+	add edi, channel.strucsize
 	dec al
 	jnz .loop_channels
 
 	; Render last channel (add rendered samples and cross-fade)
 
 .last_channel:
-	inc si
+	inc esi
 
-	movzx si, byte cs:[edx + esi]
-	call far [cs:render_mix_fn + si]
-	render_direct_mix_fn_last_addr EQU $ - 2
+	movzx esi, byte [edx + esi]
+	call [render_mix_fn + esi]
+	render_direct_mix_fn_last_addr EQU $ - 4
 
 .exit_render:
 	pop edi
-	pop gs
-	pop fs
-	pop es
 
 .exit:
-	retn
+	ret
 
 
 ;==============================================================================
 ; Data area
 ;==============================================================================
 
+section .data
+
+num_channels	dd MOD_MAX_CHANS	; Number of currently active channels
+
 		; Output buffer conversion function lookup table. Must be
 		; aligned with FMT_* constants!
 
-		alignb 2
-out_convert_fn	dw out_8bit_mono_signed
-		dw out_16bit_mono_signed
-		dw out_8bit_stereo_signed
-		dw out_16bit_stereo_signed
-		dw out_8bit_mono_unsigned
-		dw out_16bit_mono_unsigned
-		dw out_8bit_stereo_unsigned
-		dw out_16bit_stereo_unsigned
+out_convert_fn	dd out_8bit_mono_signed
+		dd out_16bit_mono_signed
+		dd out_8bit_stereo_signed
+		dd out_16bit_stereo_signed
+		dd out_8bit_mono_unsigned
+		dd out_16bit_mono_unsigned
+		dd out_8bit_stereo_unsigned
+		dd out_16bit_stereo_unsigned
 
 		; Render function lookup tables: render_store_fn for first
 		; channel (overwrites the render buffer) and render_mix_fn for
 		; further channels (adds to the render buffer).
 
-		alignb 4
-render_store_fn	dw render_left_store, modplayer_nearest
-		dw render_right_store, modplayer_nearest
-		dw render_left_store, modplayer_nearest
-		dw render_right_store, modplayer_nearest
-		dw render_stereo_store, modplayer_nearest
+render_store_fn	dd render_left_store
+		dd render_right_store
+		dd render_left_store
+		dd render_right_store
+		dd render_stereo_store
 
-render_mix_fn	dw render_left_mix, modplayer_nearest
-		dw render_right_mix, modplayer_nearest
-		dw render_left_mix, modplayer_nearest
-		dw render_right_mix, modplayer_nearest
-		dw render_stereo_mix, modplayer_nearest
+render_mix_fn	dd render_left_mix
+		dd render_right_mix
+		dd render_left_mix
+		dd render_right_mix
+		dd render_stereo_mix
 		RENDER_MIX_FN_LAST EQU $ - render_mix_fn
 
-		dw render_left_mix, modplayer_nearest
-		dw render_right_mix, modplayer_nearest
-		dw render_leftx_mix, modplayer_nearest
-		dw render_rightx_mix, modplayer_nearest
-		dw render_stereo_mix, modplayer_nearest
+		dd render_left_mix
+		dd render_right_mix
+		dd render_leftx_mix
+		dd render_rightx_mix
+		dd render_stereo_mix
 
 		; Same for linear interpolation
 
-renlin_store_fn	dw render_left_store_lin, modplayer_linear
-		dw render_right_store_lin, modplayer_linear
-		dw render_left_store_lin, modplayer_linear
-		dw render_right_store_lin, modplayer_linear
-		dw render_stereo_store_lin, modplayer_linear
+renlin_store_fn	dd render_left_store_lin
+		dd render_right_store_lin
+		dd render_left_store_lin
+		dd render_right_store_lin
+		dd render_stereo_store_lin
 
-renlin_mix_fn	dw render_left_mix_lin, modplayer_linear
-		dw render_right_mix_lin, modplayer_linear
-		dw render_left_mix_lin, modplayer_linear
-		dw render_right_mix_lin, modplayer_linear
-		dw render_stereo_mix_lin, modplayer_linear
+renlin_mix_fn	dd render_left_mix_lin
+		dd render_right_mix_lin
+		dd render_left_mix_lin
+		dd render_right_mix_lin
+		dd render_stereo_mix_lin
 
-		dw render_left_mix_lin, modplayer_linear
-		dw render_right_mix_lin, modplayer_linear
-		dw render_leftx_mix_lin, modplayer_linear
-		dw render_rightx_mix_lin, modplayer_linear
-		dw render_stereo_mix_lin, modplayer_linear
+		dd render_left_mix_lin
+		dd render_right_mix_lin
+		dd render_leftx_mix_lin
+		dd render_rightx_mix_lin
+		dd render_stereo_mix_lin
 
 		; Same for Watte tri-linear interpolation
 
-renwtl_store_fn	dw render_left_store_wtl, modplayer_watte
-		dw render_right_store_wtl, modplayer_watte
-		dw render_left_store_wtl, modplayer_watte
-		dw render_right_store_wtl, modplayer_watte
-		dw render_stereo_store_wtl, modplayer_watte
+renwtl_store_fn	dd render_left_store_wtl
+		dd render_right_store_wtl
+		dd render_left_store_wtl
+		dd render_right_store_wtl
+		dd render_stereo_store_wtl
 
-renwtl_mix_fn	dw render_left_mix_wtl, modplayer_watte
-		dw render_right_mix_wtl, modplayer_watte
-		dw render_left_mix_wtl, modplayer_watte
-		dw render_right_mix_wtl, modplayer_watte
-		dw render_stereo_mix_wtl, modplayer_watte
+renwtl_mix_fn	dd render_left_mix_wtl
+		dd render_right_mix_wtl
+		dd render_left_mix_wtl
+		dd render_right_mix_wtl
+		dd render_stereo_mix_wtl
 
-		dw render_left_mix_wtl, modplayer_watte
-		dw render_right_mix_wtl, modplayer_watte
-		dw render_leftx_mix_wtl, modplayer_watte
-		dw render_rightx_mix_wtl, modplayer_watte
-		dw render_stereo_mix_wtl, modplayer_watte
+		dd render_left_mix_wtl
+		dd render_right_mix_wtl
+		dd render_leftx_mix_wtl
+		dd render_rightx_mix_wtl
+		dd render_stereo_mix_wtl
 
 		; Lookup table for render function indexes for various stereo
 		; output modes. Must be aligned with MOD_PAN_* constants!
 
-modpantab	dw monotab, hardpantab, xpantab, realpantab
+modpantab	dd monotab, hardpantab, xpantab, realpantab
 
 		; Indexes into render_store_fn and render_mix_fn tables for
 		; various stereo output modes.
@@ -2196,10 +2085,6 @@ realpantab:	; MOD_PAN_REAL: Use real stereo mixer based on panning effect
 		%rep MOD_MAX_CHANS
 		db 16
 		%endrep
-
-
-segment modplayer_data public use16 class=DATA align=16
-segment modplayer_data
 
 		; Multiplier table for panning volume calculation (0 - 255),
 		; uses logarithmic range. The last value should be 65536, but
@@ -2245,3 +2130,16 @@ pantab		dw 0, 4104, 5804, 7108, 8208, 9177, 10053, 10858
 
 panshifttab	db 0, 5, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2
 		db 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+
+section .bss
+
+buffer_size	resd 4			; Render buffer size
+buffer_addr	resd 4			; Output render buffer address
+channels	resd channel.strucsize * MOD_MAX_CHANS
+channel_addr	resd MOD_MAX_CHANS	; Channel descriptor offset index table
+
+amplify		resw 1			; Amplification
+voltab		resw 65 * 256
+ipoltab		resw 512 << LIN_IPOL_EXP
+
+output_format	resb 1			; Output device bitstream format

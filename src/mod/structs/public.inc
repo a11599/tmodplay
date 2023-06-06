@@ -5,32 +5,14 @@
 ;==============================================================================
 
 ;------------------------------------------------------------------------------
-; Far function pointers for library dependencies. The caller must provide these
-; functions which perform a specific operation using a specific API. Refer to
-; the appropriate sys_file_* function for the API specification. It is possible
-; to load MODs from packed files or any other source by using some handcrafted
-; routines instead of sys_file_* as long as the API matches.
-;------------------------------------------------------------------------------
-
-struc		mod_file_fns
-
-.open		resd 1			; Open a file on disk (sys_file_open)
-.read		resd 1			; Read from a file (sys_file_read)
-.close		resd 1			; Close the file (sys_file_close)
-		alignb 4
-.strucsize:
-
-endstruc
-
-;------------------------------------------------------------------------------
 ; Parameters for MOD player output devices. This is just a generic table, refer
 ; to the output device for details on what to provide as an input for each of
 ; them.
 ;------------------------------------------------------------------------------
 
-struc		mod_out_params
+struc		mod_dev_params
 
-.buffer_size	resw 1			; Output buffer size in microseconds
+.buffer_size	resd 1			; Output buffer size in microseconds
 .port		resw 2			; IO port addresses
 .irq		resb 2			; IRQ addresses
 .dma		resb 2			; DMA channels
@@ -63,6 +45,23 @@ struc		mod_info
 endstruc
 
 ;------------------------------------------------------------------------------
+; MOD position and speed information structure.
+;------------------------------------------------------------------------------
+
+struc		mod_position_info
+
+.position	resb 1			; Position within pattern sequence
+.pattern	resb 1			; Pattern number
+.row		resb 1			; Row within pattern
+.tick		resb 1			; Tick within row
+.speed		resb 1			; Number of ticks per row
+.bpm		resb 1			; Beats per minute
+		alignb 4
+.strucsize:
+
+endstruc
+
+;------------------------------------------------------------------------------
 ; MOD sample information structure.
 ;------------------------------------------------------------------------------
 
@@ -85,14 +84,13 @@ endstruc
 
 struc		mod_channel_info
 
+.period		resd 1			; Current playback period * 16
+.sample_pos_int	resd 1			; Current sample position
+.sample_pos_fr	resw 1			; Current sample position fraction
 .sample		resb 1			; Sample number (0 - 32)
 .volume		resb 1			; Channel volume (0 - 64)
 .pan		resb 1			; Channel pan (0 - 255)
-		alignb 2
-.period		resw 1			; Current playback period * 16
-.sample_pos_fr	resw 1			; Current sample position fraction
 		alignb 4
-.sample_pos_int	resd 1			; Current sample position
 .strucsize:
 
 endstruc
@@ -108,6 +106,7 @@ struc		mod_output_info
 .buffer_size	resd 1			; Size of buffer in bytes
 .buffer_pos	resd 1			; Current buffer playback position
 .buffer_format	resb 1			; Buffer audio format
+		alignb 4
 .strucsize:
 
 endstruc

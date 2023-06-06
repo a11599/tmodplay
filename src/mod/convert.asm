@@ -1,43 +1,42 @@
 ;==============================================================================
-; MOD player - data conversions
+; MOD player - Data conversions
 ;==============================================================================
 
-cpu 386
+	cpu 386
 
-%include "mod/structs/global.inc"
-%include "debug/log.inc"
+%include "rtl/api/string.inc"
+%include "rtl/api/log.inc"
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
+section .text
 
 
 ;------------------------------------------------------------------------------
 ; Convert MOD period to note.
 ;------------------------------------------------------------------------------
 ; -> CX - Period
-; <- BX - Note (always an 8-bit value, but zero extended)
+; <- EBX - Note (always an 8-bit value, but zero extended)
 ;------------------------------------------------------------------------------
 
 	align 4
 
 global mod_convert_period_to_note
 mod_convert_period_to_note:
-	mov bx, notetab
+	mov ebx, notetab
 
 	align 4
 
 .loop_notetab:
-	cmp cs:[bx], cx
+	cmp [ebx], cx
 	jbe .use_note
-	add bx, 2
-	cmp bx, notetab_end
+	add ebx, 2
+	cmp ebx, notetab_end
 	jb .loop_notetab
 
 .use_note:
-	sub bx, notetab
-	shr bx, 1
+	sub ebx, notetab
+	shr ebx, 1
 
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -45,19 +44,15 @@ mod_convert_period_to_note:
 ;------------------------------------------------------------------------------
 ; -> BH - Note
 ;    AH - Finetune (-8 - 7)
-; <- CX - Period * 16
+; <- ECX - Period * 16
 ;------------------------------------------------------------------------------
 
 	align 4
 
 global mod_note_finetune
 mod_note_finetune:
-	push ax
+	push eax
 	push ebx
-	push es
-
-	mov cx, modplayer_data
-	mov es, cx
 
 	mov al, PERTAB_LEN
 	cmp bh, al			; Limit note to highest note
@@ -66,15 +61,17 @@ mod_note_finetune:
 
 .use_note:
 	imul ah
-	movzx bx, bh
-	add bx, ax
-	add bx, bx
-	mov cx, es:[pertab + bx]
 
-	pop es
+	shl eax, 16
+	movzx ebx, bh
+	sar eax, 16			; Sign-extend AX to EAX
+	xor ecx, ecx
+	add ebx, eax
+	mov cx, [pertab + ebx * 2]
+
 	pop ebx
-	pop ax
-	retn
+	pop eax
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -82,55 +79,50 @@ mod_note_finetune:
 ;------------------------------------------------------------------------------
 ; -> CX - Period * 16
 ;    AH - Finetune (-8 - 7)
-; <- CX - Period * 16 rounded down to nearest semitone
+; <- ECX - Period * 16 rounded down to nearest semitone
 ;------------------------------------------------------------------------------
 
 	align 4
 
 global mod_period_floor_seminote
 mod_period_floor_seminote:
-	push ax
+	push eax
 	push ebx
-	push dx
-	push es
+	push edx
 
-	mov bx, modplayer_data
-	mov es, bx
-
-	mov dx, cx			; DX: period * 16
+	mov edx, ecx			; DX: period * 16
 	mov al, PERTAB_LEN
-	movzx cx, al
-	dec cx				; CX: period table length - 1
+	mov ecx, PERTAB_LEN - 1
 	imul ah
 	movsx ebx, ax			; EBX: index into finetuned period table
 
 	align 4
 
 .find_period:
-	cmp dx, es:[pertab + ebx * 2]
+	cmp dx, [pertab + ebx * 2]
 	jae .found_period
 	inc ebx
-	dec cx
+	dec ecx
 	jnz .find_period
 
 .found_period:
 	mov cx, es:[pertab + ebx * 2]
 
-	pop es
-	pop dx
+	pop edx
 	pop ebx
-	pop ax
-	retn
+	pop eax
+	ret
 
 
 ;==============================================================================
 ; Data area
 ;==============================================================================
 
+section .data
+
 		;--------------------------------------------------------------
 		; Period to note conversion table
 
-		alignb 2
 notetab		dw 3424, 3232, 3048, 2880, 2712, 2560, 2416, 2280, 2152, 2032, 1920, 1812,
 		dw 1712, 1616, 1524, 1440, 1356, 1280, 1208, 1140, 1076, 1016, 960, 906,
 		dw 856, 808, 762, 720, 678, 640, 604, 570, 538, 508, 480, 453,
@@ -139,10 +131,6 @@ notetab		dw 3424, 3232, 3048, 2880, 2712, 2560, 2416, 2280, 2152, 2032, 1920, 18
 		dw 107, 101, 95, 90, 85, 80, 75, 71, 67, 63, 60, 56,
 		dw 53, 50, 47, 45, 42, 40, 37, 35, 33, 31, 30, 28
 notetab_end:
-
-
-segment modplayer_data public use16 class=DATA align=16
-segment modplayer_data
 
 		;--------------------------------------------------------------
 		; Period * 16 tables
@@ -161,8 +149,6 @@ segment modplayer_data
 		; octaves, especially with finetune. A slight detune will still
 		; remain, any attempt to fix this would introduce inaccuracy or
 		; out-of-tune between sounds 2 octaves apart.
-
-		alignb 2
 
 		; Tuning -8
 		dw 58048, 54784, 51712, 48768, 46080, 43392, 40960, 38656, 36480, 34432, 32512, 30720

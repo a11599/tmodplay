@@ -6,11 +6,11 @@
 
 ; Error codes
 
-MOD_ERR_INVALID	EQU -1			; Invalid file format
-MOD_ERR_DEV_UNK	EQU -2			; Unknown device
-MOD_ERR_NB_CHN	EQU -3			; Too many or no channels
-MOD_ERR_PLAYING	EQU -4			; Already playing
-MOD_ERR_DEVICE	EQU -5			; Output device not responding
+MOD_ERR_INVALID	EQU 0x100		; Invalid file format
+MOD_ERR_DEV_UNK	EQU 0x101		; Unknown device
+MOD_ERR_NB_CHN	EQU 0x102		; Too many or no channels
+MOD_ERR_STATE	EQU 0x103		; Invalid MOD player state for action
+MOD_ERR_DEVICE	EQU 0x104		; Output device not responding
 
 ; MOD file flags
 

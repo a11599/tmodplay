@@ -1,5 +1,5 @@
 ;==============================================================================
-; MOD player - output device
+; MOD player - Output device
 ;------------------------------------------------------------------------------
 ; Constants
 ;==============================================================================
@@ -28,3 +28,11 @@ SMP_SET_POS	EQU 0x02
 MIX_SET_VOL	EQU 0x01
 MIX_SET_PAN	EQU 0X02
 MIX_SET_SPD	EQU 0X04
+
+; Buffer rendering status
+
+BUF_READY	EQU 0
+BUF_RENDERING	EQU 1
+BUF_RENDER_1	EQU 2
+BUF_RENDER_2	EQU 3
+BUF_RENDER_3	EQU 4

@@ -6,8 +6,8 @@
 
 ; Error codes
 
-GUI_ERR_NOVGA	EQU -1			; No supported graphical mode available
-GUI_ERR_FONT	EQU -2			; Unsupported font
+GUI_ERR_NOVGA	EQU 0x200		; No supported graphical mode available
+GUI_ERR_FONT	EQU 0x201		; Unsupported font
 
 ; Alignment
 

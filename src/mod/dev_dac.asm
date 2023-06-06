@@ -25,26 +25,33 @@
 ; mode only.
 ;==============================================================================
 
-cpu 386
+	cpu 386
 
-%include "system/api/memory.inc"
-%include "system/api/pit.inc"
-%include "system/api/pic.inc"
-%include "mod/consts/global.inc"
-%include "mod/consts/public.inc"
-%include "mod/structs/global.inc"
-%include "mod/structs/out_dac.inc"
-%include "mod/consts/out.inc"
-%include "mod/consts/out_dac.inc"
+section .text
+
+%include "pmi/api/pmi.inc"
+%include "rtl/api/string.inc"
+%include "rtl/api/log.inc"
+%include "rtl/api/irq.inc"
+%include "rtl/api/timer.inc"
+
+%include "mod/config.inc"
 %include "mod/api/wtbl_sw.inc"
 %include "mod/api/routine.inc"
-%include "debug/log.inc"
+%include "mod/structs/public.inc"
+%include "mod/consts/public.inc"
+%include "mod/structs/dev.inc"
+%include "mod/consts/dev.inc"
+
+%ifdef MOD_USE_PROFILER
+extern mod_perf_ticks
+%include "rtl/api/profiler.inc"
+%endif
 
 ; Shortcut macros for easier access to nested structures
 
-%define	state(var) mod.out_state + mod_out_dac_state. %+ var
-%define	params(var) mod.out_params + mod_out_params. %+ var
-%define	set_out_fn(name, lbl) at mod_out_fns. %+ name, dw %+ (lbl)
+%define	params(var) params + mod_dev_params. %+ var
+%define	set_api_fn(name, lbl) at mod_dev_api. %+ name, dd %+ (lbl)
 
 ; Printer control bits to select left/right channel for stereo LPT DAC
 
@@ -52,17 +59,14 @@ LPTST_CHN_LEFT	EQU 00000001b
 LPTST_CHN_RIGHT	EQU 00000010b
 LPTST_CHN_BOTH	EQU 00000011b
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
-
 
 ;------------------------------------------------------------------------------
 ; Set up the DAC output device.
 ;------------------------------------------------------------------------------
 ; -> AL - Output device type (MOD_DAC_*)
-;    CX - Amplification as 8.8-bit fixed point value
+;    EBX - Pointer to mod_dev_params structure
+;    CH.CL - Amplification in 8.8-bit fixed point format
 ;    EDX - Requested sample rate
-;    DS - Player instance segment
 ; <- CF - Set if error
 ;    EAX - Error code if CF set or actual sample rate
 ;    EBX - Number of extra samples that will be generated at the end of each
@@ -71,17 +75,27 @@ segment modplayer
 ;          each sample (must reserve enough space) if no error
 ;------------------------------------------------------------------------------
 
-	align 4
-
 setup:
 	push edx
+	push esi
+	push edi
 	push ebx
 	push ecx
 
+	cld
+
+	mov [dev_type], al
+	mov [amplify], cx
+
+	; Copy parameters to local instance
+
+	mov esi, ebx
+	mov edi, params
+	mov ecx, (mod_dev_params.strucsize + 3) / 4
+	rep movsd
+
 	; Validate configuration
 
-	mov [state(dev_type)], al
-	mov [state(amplify)], cx
 	cmp al, MOD_DAC_LPTDUAL
 	ja .unknown_device
 
@@ -111,41 +125,41 @@ setup:
 	cmp al, MOD_DAC_LPTDUAL
 	je .stereo_device
 	or ah, FMT_MONO
-	jmp .save_out_format
+	jmp .use_output_format
 
 .stereo_device:
 	cmp byte [params(stereo_mode)], MOD_PAN_MONO
-	je .save_out_format
+	je .use_output_format
 	or ah, FMT_STEREO
 
-.save_out_format:
-	mov [state(output_format)], ah
+.use_output_format:
+	mov [output_format], ah
 
-	%ifdef __DEBUG__
+	%if (LOG_LEVEL >= LOG_INFO)
 
-	; Show configuration when debug is enabled
+	; Log configuration
 
 	cmp al, MOD_DAC_SPEAKER
 	jne .check_lpt
-	log {'Output device: Internal PC speaker', 13, 10}
+	log LOG_INFO, {'Output device: Internal PC speaker', 13, 10}
 	jmp .calc_pit_rate
 
 .check_lpt:
 	cmp al, MOD_DAC_LPT
 	jne .check_lptst
-	log {'Output device: Mono LPT DAC on port {X16}', 13, 10}, [params(port)]
+	log LOG_INFO, {'Output device: Mono LPT DAC on port 0x{X16}', 13, 10}, [params(port)]
 	jmp .calc_pit_rate
 
 .check_lptst:
 	cmp al, MOD_DAC_LPTST
 	jne .check_lptdual
-	log {'Output device: Stereo LPT DAC on port {X16}', 13, 10}, [params(port)]
+	log LOG_INFO, {'Output device: Stereo LPT DAC on port 0x{X16}', 13, 10}, [params(port)]
 	jmp .calc_pit_rate
 
 .check_lptdual:
 	cmp al, MOD_DAC_LPTDUAL
 	jne .calc_pit_rate
-	log {'Output device: Dual LPT DACs on port {X16} and {X16}', 13, 10}, [params(port)], [params(port + 2)]
+	log LOG_INFO, {'Output device: Dual LPT DACs on port 0x{X16} and 0x{X16}', 13, 10}, [params(port)], [params(port + 2)]
 
 	%endif
 
@@ -153,9 +167,9 @@ setup:
 
 	; Calculate PIT/actual sample rate
 
-	call far sys_pit_calc_rate
-	mov [state(pit_rate)], bx
-	mov [state(sample_rate)], eax	; Save actual sample rate
+	call timer_calc_rate
+	mov [pit_rate], bx
+	mov [sample_rate], eax		; Save actual sample rate
 
 	; Calculate period -> SW wavetable speed conversion base
 
@@ -168,12 +182,12 @@ setup:
 	setae dl
 	movzx edx, dl			; EDX: 1 when yes, 0 otherwise
 	add eax, edx
-	mov [state(period_base)], eax
+	mov [period_base], eax
 
 	; Allocate memory for the output buffer
 
-	mov eax, [state(sample_rate)]	; Convert microsec to buffer size
-	movzx ebx, word [params(buffer_size)]
+	mov eax, [sample_rate]		; Convert microsec to buffer size
+	mov ebx, [params(buffer_size)]
 	cmp ebx, 1000000
 	jae .limit_buffer_size
 	mul ebx
@@ -192,38 +206,35 @@ setup:
 	mov eax, 4096
 
 .use_buffer_size:
-	mov [params(buffer_size)], ax
+	mov [params(buffer_size)], eax
 
 	mov ebx, eax
 	shl ebx, 3			; 32-bit stereo buffer of SW wavetable
-	mov [state(buffer_size)], ebx
-	lea ebx, [ebx + ebx * 2]	; Triple buffering
-	mov al, SYS_MEM_HI_LO
-	call far sys_mem_alloc
+	mov [buffer_size], ebx
+	lea ecx, [ebx + ebx * 2]	; Triple buffering
+	mov al, PMI_MEM_HI_LO
+	call pmi(mem_alloc)
 	jc .error
-	mov [state(buffer_addr)], eax
-	mov ecx, eax
-	sub ecx, [mod.instance_addr]
-	mov [state(buffer_ofs)], ecx
+	mov [buffer_addr], eax
 
-	log {'Allocated {u} bytes for output device buffer @{X}', 13, 10}, ebx, eax
+	log {'Allocated {u} bytes for output device buffer at 0x{X}', 13, 10}, ecx, eax
 
-	cmp byte [state(dev_type)], MOD_DAC_SPEAKER
+	cmp byte [dev_type], MOD_DAC_SPEAKER
 	jne .setup_wt
 
 	; Create speaker sample lookup table
 
-	xor bx, bx			; BX: sample (0 - 255)
-	mov cx, [state(pit_rate)]	; CX: timer IRQ PIT rate (always 8-bit)
-	cmp cx, 64
+	xor ebx, ebx			; EBX: sample (0 - 255)
+	movzx ecx, word [pit_rate]	; ECX: timer IRQ PIT rate (always 8-bit)
+	cmp ecx, 64
 	jbe .speakertab_loop
-	mov cx, 64
+	mov ecx, 64
 
 .speakertab_loop:
 	mov al, bl
 	mul cl
 	inc ah
-	mov [state(speakertab) + bx], ah
+	mov [speakertab + ebx], ah
 	inc bl
 	jnz .speakertab_loop
 
@@ -233,24 +244,29 @@ setup:
 
 	mov al, [params(interpolation)]
 	mov ah, [params(stereo_mode)]
-	mov bx, [state(amplify)]
-	mov cx, 0
-	mov dl, [state(output_format)]
+	mov bx, [amplify]
+	xor ecx, ecx			; Render to output buffer directly
+	mov dl, [output_format]
 	mov dh, [params(initial_pan)]
 	call mod_swt_setup
 	jc .error
-	mov [state(amplify)], bx
+	mov [amplify], bx
 	mov ebx, eax
 
 	; Done
 
-	add sp, 8			; Discard EBX and ECX from stack
-	mov eax, [state(sample_rate)]
+	add esp, 8			; Discard EBX and ECX from stack
+	mov eax, [sample_rate]
 	clc
 
 .exit:
+	pop edi
+	pop esi
 	pop edx
-	retn
+	ret
+
+.unknown_device:
+	mov eax, MOD_ERR_DEV_UNK
 
 .error:
 	pop ecx
@@ -258,22 +274,16 @@ setup:
 	stc
 	jmp .exit
 
-.unknown_device:
-	mov eax, MOD_ERR_DEV_UNK
-	jmp .error
-
 
 ;------------------------------------------------------------------------------
 ; Shutdown the output device. No further playback is possible until the setup
 ; function is called again.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;------------------------------------------------------------------------------
-
-	align 4
 
 shutdown:
 	push eax
+
+	log LOG_INFO, {'Shutting down DAC output device', 13, 10}
 
 	; Shutdown wavetable
 
@@ -281,46 +291,42 @@ shutdown:
 
 	; Release memory
 
-	mov eax, [state(buffer_addr)]
+	mov eax, [buffer_addr]
 	test eax, eax
 	jz .done
 
-	log {'Disposing output buffer @{X}', 13, 10}, eax
+	log {'Disposing output buffer at 0x{X}', 13, 10}, eax
 
-	call far sys_mem_free
-	mov dword [state(buffer_addr)], 0
+	call pmi(mem_free)
+	mov dword [buffer_addr], 0
 
 .done:
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Set the amplification level.
 ;------------------------------------------------------------------------------
 ; -> AH.AL - Requested audio amplification in 8.8 fixed point value
-;    DS - Player instance segment
 ; <- AH.AL - Actual audio amplification level
 ;------------------------------------------------------------------------------
 
 	align 4
 
 set_amplify:
-	mov [state(amplify)], ax
+	mov [amplify], ax
 	call mod_swt_set_amplify
-	mov [state(amplify)], ax
+	mov [amplify], ax
 
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Start playback on the DAC device.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
-
-	align 4
 
 play:
 	push eax
@@ -330,56 +336,51 @@ play:
 	push esi
 	push edi
 	push ebp
-	push es
 
 	; Reset audio output
 
 	mov dh, [params(initial_pan)]
 	call mod_swt_reset_channels
 
-	mov byte [state(buffer_playprt)], 0
-	mov word [state(play_sam_int)], 0
-	mov word [state(play_sam_fr)], 0
-	mov eax, [state(buffer_ofs)]
-	mov [state(buffer_pos)], eax
-	add eax, [state(buffer_size)]
-	mov [state(buffer_limit)], eax
+	mov byte [buffer_playprt], 0
+	mov dword [play_sam_int], 0
+	mov dword [play_sam_fr], 0
+	mov eax, [buffer_addr]
+	mov [buffer_pos], eax
+	add eax, [buffer_size]
+	mov [buffer_limit], eax
+	mov byte [playing], 1
 
 	; Pre-render into output buffer before starting playback
 
-	mov byte [state(buffer_pending)], BUF_READY
-	mov byte [state(buffer_status)], BUF_RENDER_1
+	mov byte [buffer_pending], BUF_READY
+	mov byte [buffer_status], BUF_RENDER_1
 	call render
-	mov byte [state(buffer_status)], BUF_RENDER_2
+	mov byte [buffer_status], BUF_RENDER_2
 	call render
-	mov byte [state(buffer_status)], BUF_RENDER_3
+	mov byte [buffer_status], BUF_RENDER_3
 	call render
-
-	cli
 
 	; Setup and install IRQ 0 handler
 
-	xor cl, cl
-	call far sys_pic_irq_to_int
-	call far sys_get_int_handler
-	mov cs:[irq0_prev_handler], bx
-	mov cs:[irq0_prev_handler + 2], es
-	mov ax, cs
-	mov es, ax
-	mov dx, [params(port)]		; DX: first port
-	mov di, [params(port + 2)]	; DI: second port
+	xor al, al
+	call pmi(get_irq_hndlr)
+	mov [irq0_prev_handler], edx
+	mov [irq0_prev_handler + 4], cx
+	movzx edx, word [params(port)]	; EDX, EDI: parallel port DAC I/O ports
+	movzx edi, word [params(port + 2)]
 
 	; Since all DAC device rely on the PC's timer interrupt, each device
 	; has its own dedicated IRQ 0 handler with code optimized to be as fast
-	; as possible since.
+	; as possible since it's called at the frequency of the sample rate.
 
-	cmp byte [state(dev_type)], MOD_DAC_SPEAKER
+	cmp byte [dev_type], MOD_DAC_SPEAKER
 	je .start_speaker
-	cmp byte [state(dev_type)], MOD_DAC_LPTST
+	cmp byte [dev_type], MOD_DAC_LPTST
 	je .start_lpt_dac_stereo
-	cmp byte [state(dev_type)], MOD_DAC_LPTDUAL
+	cmp byte [dev_type], MOD_DAC_LPTDUAL
 	je .start_lpt_dac_dual
-	cmp byte [state(dev_type)], MOD_DAC_LPT
+	cmp byte [dev_type], MOD_DAC_LPT
 	je .start_lpt_dac
 
 .start_speaker:
@@ -393,8 +394,8 @@ play:
 	out 0x43, al
 	mov al, 0x01
 	out 0x42, al
-	mov cs:[speaker_irq0_player_segment], ds
-	mov bx, speaker_irq0_handler
+	mov word [speaker_irq0_player_segment], ds
+	mov edx, speaker_irq0_handler
 	jmp .setup_irq_handler
 
 .start_lpt_dac_stereo:
@@ -404,14 +405,14 @@ play:
 	; auto linefeed pins. See LPTST_CHN_* constants for printer control
 	; values.
 
-	add dx, 2
+	add edx, 2
 	in al, dx
-	mov [state(lpt_prn_ctrl)], al
-	test byte [state(output_format)], FMT_STEREO
+	mov [lpt_prn_ctrl], al
+	test byte [output_format], FMT_STEREO
 	jz .start_lpt_dac_stereo_mono
-	mov cs:[lpt_dac_stereo_irq0_player_segment], ds
-	mov cs:[lpt_dac_stereo_irq0_ctrl_port], dx
-	mov bx, lpt_dac_stereo_irq0_handler
+	mov word [lpt_dac_stereo_irq0_player_segment], ds
+	mov [lpt_dac_stereo_irq0_ctrl_port], edx
+	mov edx, lpt_dac_stereo_irq0_handler
 	jmp .setup_irq_handler
 
 .start_lpt_dac_stereo_mono:
@@ -421,62 +422,61 @@ play:
 
 	mov al, LPTST_CHN_BOTH
 	out dx, al
-	sub dx, 2
+	sub edx, 2
 	jmp .start_lpt_dac
 
 .start_lpt_dac_dual:
 
-	; Setup dual LPT DAC. This requires two parallel ports and two mono
-	; 8-bit DACs connected to each. Device on first port is left channel
-	; and device on second port is right channel.
+	; Setup dual LPT DAC. This requires two parallel ports with a mono
+	; 8-bit DAC connected to each. Device on first port is left channel and
+	; device on second port is right channel.
 
-	test byte [state(output_format)], FMT_STEREO
+	test byte [output_format], FMT_STEREO
 	jz .start_lpt_dac_dual_mono
-	mov cs:[lpt_dac_dual_irq0_player_segment], ds
-	mov cs:[lpt_dac_dual_irq0_port1], dx
-	mov cs:[lpt_dac_dual_irq0_port2a], di
-	mov cs:[lpt_dac_dual_irq0_port2b], di
-	mov bx, lpt_dac_dual_irq0_handler
+	mov word [lpt_dac_dual_irq0_player_segment], ds
+	mov [lpt_dac_dual_irq0_port1], edx
+	mov [lpt_dac_dual_irq0_port2a], edi
+	mov [lpt_dac_dual_irq0_port2b], edi
+	mov edx, lpt_dac_dual_irq0_handler
 	jmp .setup_irq_handler
 
 .start_lpt_dac_dual_mono:
 
 	; Dual LPT DAC with forced mono output
 
-	mov cs:[lpt_dac_dual_mono_irq0_player_segment], ds
-	mov cs:[lpt_dac_dual_mono_irq0_port1], dx
-	mov cs:[lpt_dac_dual_mono_irq0_port2a], di
-	mov cs:[lpt_dac_dual_mono_irq0_port2b], di
-	mov bx, lpt_dac_dual_mono_irq0_handler
+	mov word [lpt_dac_dual_mono_irq0_player_segment], ds
+	mov [lpt_dac_dual_mono_irq0_port1], edx
+	mov [lpt_dac_dual_mono_irq0_port2a], edi
+	mov [lpt_dac_dual_mono_irq0_port2b], edi
+	mov edx, lpt_dac_dual_mono_irq0_handler
 	jmp .setup_irq_handler
 
 .start_lpt_dac:
 
 	; Mono (single) LPT DAC
 
-	mov cs:[lpt_dac_irq0_player_segment], ds
-	mov cs:[lpt_dac_irq0_port1], dx
-	mov bx, lpt_dac_irq0_handler
+	mov word [lpt_dac_irq0_player_segment], ds
+	mov [lpt_dac_irq0_port1], edx
+	mov edx, lpt_dac_irq0_handler
 
 .setup_irq_handler:
-	call far sys_set_int_handler
+	xor al, al			; AL might be destroyed above
+	mov cx, cs
+	call pmi(set_irq_hndlr)
 
-	; Program the PIT
+	; Set the rate of the timer interrupt
 
-	mov word [state(pit_tick_count)], 0
-	mov bx, [state(pit_rate)]
-	call far sys_pit_set_irq0_rate
+	mov word [pit_tick_count], 0
+	mov bx, [pit_rate]
+	call timer_set_rate
 
 	; Enable IRQ 0
 
-	xor cx, cx
-	call far sys_pic_enable_irq
-
-	sti
+	xor cl, cl
+	call irq_enable
 
 .exit:
 	clc
-	pop es
 	pop ebp
 	pop edi
 	pop esi
@@ -484,40 +484,39 @@ play:
 	pop ecx
 	pop ebx
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Stop playback on the DAC device.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
 
-	align 4
-
 stop:
+	mov byte [playing], 0
+
 	push eax
-	push bx
-	push cx
-	push dx
-	push es
+	push ebx
+	push ecx
+	push edx
 
-	cli
+	; Restore the rate of the timer
 
-	; Reset state
-
-	mov word [state(pit_tick_count)], 0
+	call timer_reset_rate
 
 	; Uninstall IRQ 0 handler
 
-	xor cl, cl
-	call far sys_pic_irq_to_int
-	mov es, cs:[irq0_prev_handler + 2]
-	mov bx, cs:[irq0_prev_handler]
-	call far sys_set_int_handler
+	xor al, al
+	mov cx, [irq0_prev_handler + 4]
+	mov edx, [irq0_prev_handler]
+	call pmi(set_irq_hndlr)
 
-	cmp byte [state(dev_type)], MOD_DAC_SPEAKER
+	; Reset state
+
+	mov word [pit_tick_count], 0
+
+	cmp byte [dev_type], MOD_DAC_SPEAKER
 	jne .stop_dac_lptst
 
 	; Restore speaker state
@@ -530,34 +529,26 @@ stop:
 	xor al, al
 	out 0x42, al
 	out 0x42, al
-  	jmp .reset_pit
+  	jmp .done
 
 .stop_dac_lptst:
-	cmp byte [state(dev_type)], MOD_DAC_LPTST
-	jne .reset_pit
+	cmp byte [dev_type], MOD_DAC_LPTST
+	jne .done
 
 	; Restore LPT printer controls for stereo LPT DAC
 
 	mov dx, [params(port)]
 	add dx, 2
-	mov al, [state(lpt_prn_ctrl)]
+	mov al, [lpt_prn_ctrl]
 	out dx, al
 
-.reset_pit:
-
-	; Reset the PIT
-
-	call far sys_pit_reset_irq0_rate
-
-	sti
-
+.done:
 	clc
-	pop es
-	pop dx
-	pop cx
-	pop bx
+	pop edx
+	pop ecx
+	pop ebx
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -570,8 +561,7 @@ stop:
 ;         bit 2: Set speed to CX
 ;    BL - Volume (0 - 64)
 ;    BH - Panning (0 - 255)
-;    CX - Playback note periods
-;    DS - Player instance segment
+;    ECX - Playback note periods
 ;------------------------------------------------------------------------------
 
 	align 4
@@ -587,12 +577,12 @@ set_mixer:
 	push edx
 
 	push eax
-	test cx, cx			; Guard against division by zero hangs
+	xor eax, eax
+	test ecx, ecx			; Guard against division by zero hangs
 	setz al
-	xor ah, ah
-	add cx, ax
+	add ecx, eax
 	xor edx, edx
-	mov eax, [state(period_base)]
+	mov eax, [period_base]
 	and ecx, 0xffff
 	div ecx
 	shr ecx, 1			; ECX: period / 2
@@ -600,23 +590,22 @@ set_mixer:
 	setae dl
 	movzx edx, dl			; EDX: 1 when yes, 0 otherwise
 	add eax, edx
-	mov dx, ax
+	mov edx, eax
 	shr eax, 16
-	mov cx, ax
+	mov ecx, eax			; ECX.DX: playback speed
 	pop eax
 
 	call mod_swt_set_mixer
 
 	pop edx
 	pop ecx
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Set the playroutine callback tick rate.
 ;------------------------------------------------------------------------------
-; -> BX - Number of playroutine ticks per minute
-;    DS - Player instance segment
+; -> EBX - Number of playroutine ticks per minute
 ;------------------------------------------------------------------------------
 
 	align 4
@@ -628,7 +617,7 @@ set_tick_rate:
 
 	; Calculate number of samples between player ticks
 
-	mov eax, [state(sample_rate)]
+	mov eax, [sample_rate]
 	mov edx, eax
 	shl eax, 6
 	shl edx, 2
@@ -640,104 +629,115 @@ set_tick_rate:
 	div ebx
 
 	mov ebx, eax
-	shr ebx, 16			; BX.AX: Number of samples between ticks
-	mov [state(play_tickr_int)], bx
-	mov [state(play_tickr_fr)], ax
+	shr ebx, 16
+	shl eax, 16			; EBX.EAX: samples between ticks
+	mov [play_tickr_int], ebx
+	mov [play_tickr_fr], eax
 
 	pop edx
 	pop ebx
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Render channels into the output buffer.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
 ; <- Destroys everything except segment registers
 ;------------------------------------------------------------------------------
 
 	align 4
 
 render:
+	%ifdef MOD_USE_PROFILER
+	call profiler_get_counter
+	push eax
+	%endif
 	mov al, BUF_RENDERING
-	xchg al, byte [state(buffer_status)]
+	xchg al, byte [buffer_status]
 	cmp al, BUF_RENDERING
-	je .exit			; BUF_RENDERING: already rendering audio
+	je .rendering			; BUF_RENDERING: already rendering audio
 	jb .noop			; BUF_READY: nothing to render
+	cmp byte [playing], 1		; Not playing, don't render
+	jne .exit
 
 	; Initialize state
 
-	mov dx, [params(buffer_size)]	; DX: number of samples to render
-	mov bx, [state(play_sam_int)]	; BX: samples until playroutine tick
-	mov edi, [state(buffer_addr)]
+	push eax
+
+	mov edx, [params(buffer_size)]	; EDX: number of samples to render
+	mov ebx, [play_sam_int]		; EBX: samples until playroutine tick
+	mov edi, [buffer_addr]
 	cmp al, BUF_RENDER_1
 	je .loop_render
-	mov esi, [state(buffer_size)]	; 2nd part of buffer
+	mov esi, [buffer_size]		; 2nd part of buffer
 	add edi, esi
 	cmp al, BUF_RENDER_2
 	je .loop_render
 	add edi, esi			; 3rd part of buffer
 
 	; Render samples to the output audio buffer
-	; BX: number of samples until next playroutine tick
-	; CX: number of samples to render by software wavetable in current pass
-	; DX: number of samples to render into output audio buffer
+	; EBX: number of samples until next playroutine tick
+	; ECX: number of samples to render by software wavetable in current pass
+	; EDX: number of samples to render into output audio buffer
 	; EDI: linear address of output audio buffer position to render into
 
 .loop_render:
 
 	; Call playroutine tick when necessary
 
-	test bx, bx
+	test ebx, ebx
 	jnz .calc_render_count
 
-	push bx
-	push cx
-	push dx
+	push ebx
+	push ecx
+	push edx
 	push edi
 	call mod_playroutine_tick
 	pop edi
-	pop dx
-	pop cx
-	pop bx
+	pop edx
+	pop ecx
+	pop ebx
 
-	mov ax, [state(play_tickr_fr)]
-	add [state(play_sam_fr)], ax
-	adc bx, 0
-	add bx, [state(play_tickr_int)]
+	mov eax, [play_tickr_fr]
+	add [play_sam_fr], eax
+	adc ebx, 0
+	add ebx, [play_tickr_int]
 
 .calc_render_count:
 
 	; Determine number of samples to render in this pass
 
-	movzx ecx, dx			; CX: number of samples to render
-	cmp cx, bx			; Don't render past playroutine tick
+	mov ecx, edx			; ECX: number of samples to render
+	cmp ecx, ebx			; Don't render past playroutine tick
 	jb .render_swt
-	mov cx, bx
+	mov ecx, ebx
 
 .render_swt:
 
 	; Render channels using software wavetable
 
-	push bx
+	push ebx
 	push ecx
-	push dx
+	push edx
 	call mod_swt_render_direct
-	pop dx
+	pop edx
 	pop ecx
-	pop bx
+	pop ebx
 
 	; Calculate number of samples left to render
 
 	lea edi, [edi + ecx * 8]
-	sub bx, cx
-	sub dx, cx
+	sub ebx, ecx
+	sub edx, ecx
 	jnz .loop_render
+
+	pop eax
 
 	; Output buffer completely rendered
 
-	mov [state(play_sam_int)], bx	; Update samples until playroutine tick
+	mov [play_sam_int], ebx		; Update samples until playroutine tick
+	call update_buffer_position
 
 .noop:
 
@@ -745,19 +745,31 @@ render:
 	; data)
 
 	mov al, BUF_READY
-	xchg al, [state(buffer_pending)]
-	mov [state(buffer_status)], al
+	xchg al, [buffer_pending]
+	mov [buffer_status], al
 
 .exit:
-	retn
+	%ifdef MOD_USE_PROFILER
+	call profiler_get_counter
+	pop ebx
+	sub eax, ebx
+	add [mod_perf_ticks], eax
+	%endif
+	ret
+
+.rendering:
+	mov al, [buffer_pending]
+	cmp al, BUF_RENDER_1
+	jb .exit
+	call update_buffer_position
+	jmp .exit
 
 
 ;------------------------------------------------------------------------------
 ; Return information about output device.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-; -> ES:EDI - Pointer to buffer receiving mod_channel_info structures
-; <- ES:EDI - Filled with data
+; -> ESI - Pointer to buffer receiving mod_channel_info structures
+; <- ESI - Filled with data
 ;------------------------------------------------------------------------------
 
 get_info:
@@ -766,16 +778,16 @@ get_info:
 
 	; Buffer info
 
-	mov eax, [state(sample_rate)]
-	mov es:[edi + mod_output_info.sample_rate], eax
-	mov eax, [state(buffer_addr)]
-	mov es:[edi + mod_output_info.buffer_addr], eax
-	mov eax, [state(buffer_size)]
-	lea eax, [eax + eax * 2]
-	mov es:[edi + mod_output_info.buffer_size], eax
-	mov eax, [state(buffer_pos)]
-	sub eax, [state(buffer_ofs)]
-	mov es:[edi + mod_output_info.buffer_pos], eax
+	mov eax, [sample_rate]
+	mov [esi + mod_output_info.sample_rate], eax
+	mov eax, [buffer_addr]
+	mov [esi + mod_output_info.buffer_addr], eax
+	mov eax, [buffer_size]
+	lea eax, [eax + eax * 2]	; Triple buffering
+	mov [esi + mod_output_info.buffer_size], eax
+	mov eax, [buffer_pos]
+	sub eax, [buffer_addr]
+	mov [esi + mod_output_info.buffer_pos], eax
 
 .format:
 
@@ -783,26 +795,78 @@ get_info:
 	; as software wavetable render buffer format), but only left channel
 	; used when output device is mono
 
-	mov cl, [state(output_format)]
+	mov cl, [output_format]
 	and cl, FMT_CHANNELS
 	cmp cl, FMT_STEREO
 	je .stereo
-	mov byte es:[edi + mod_output_info.buffer_format], MOD_BUF_1632BIT | MOD_BUF_2CHNL | MOD_BUF_INT
+	mov byte [esi + mod_output_info.buffer_format], MOD_BUF_1632BIT | MOD_BUF_2CHNL | MOD_BUF_INT
 	jmp .done
 
 .stereo:
-	mov byte es:[edi + mod_output_info.buffer_format], MOD_BUF_1632BIT | MOD_BUF_2CHN | MOD_BUF_INT
+	mov byte [esi + mod_output_info.buffer_format], MOD_BUF_1632BIT | MOD_BUF_2CHN | MOD_BUF_INT
 
 .done:
 	pop ecx
 	pop eax
-	retn
+	ret
+
+
+;------------------------------------------------------------------------------
+; Return current MOD playback position.
+;------------------------------------------------------------------------------
+; -> ESI - Pointer to buffer receiving mod_position_info structures
+; <- ESI - Filled with data
+;------------------------------------------------------------------------------
+
+get_position:
+	push ecx
+	push esi
+	push edi
+
+	mov edi, esi
+	xor esi, esi
+	cmp byte [buffer_playprt], 1
+	jb .done
+	mov esi, mod_position_info.strucsize
+	je .done
+	add esi, esi
+
+.done:
+	add esi, position_info
+	mov ecx, (mod_position_info.strucsize) / 4
+	rep movsd
+
+	pop edi
+	pop esi
+	pop ecx
+	ret
+
+
+;------------------------------------------------------------------------------
+; Update song position information for a specific buffer part.
+;------------------------------------------------------------------------------
+; -> AL - Buffer part number (BUF_RENDER_n)
+;------------------------------------------------------------------------------
+
+update_buffer_position:
+	push esi
+	xor esi, esi			; Save playback position for this buffer
+	cmp al, BUF_RENDER_2
+	jb .get_position
+	mov esi, mod_position_info.strucsize
+	je .get_position
+	add esi, esi
+
+.get_position:
+	add esi, position_info
+	call mod_playroutine_get_position_info
+	pop esi
+	ret
 
 
 ;==============================================================================
 ; DAC playback timer interrupt handlers.
 ;==============================================================================
-
 
 ;------------------------------------------------------------------------------
 ; Macro to push registers onto the stack at IRQ 0 entry.
@@ -839,18 +903,17 @@ get_info:
 ; Send the end of interrupt signal to the interrupt controller and call the
 ; original IRQ 0 handler at the standard 18.2 Hz rate.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;    %1 - Jump target when ready or 0 to exit IRQ 0
+; -> %1 - Jump target when ready or 0 to exit IRQ 0
 ; <- Destroys AL and DX
 ;------------------------------------------------------------------------------
 
 %macro	irq0_eoi 1
 
-	mov dx, [state(pit_rate)]	; Call old handler if internal tick
-	add [state(pit_tick_count)], dx	; counter overflows 16-bit
+	mov dx, [pit_rate]		; Call old handler if internal tick
+	add [pit_tick_count], dx	; counter overflows 16-bit
 	jc %%call_prev_handler
 
-	sys_pic_eoi 0			; Destroys AL
+	irq_pic_eoi 0			; Destroys AL
 
 	%if (%1 = 0)			; Exit IRQ 0 or jump to target label
 	irq0_exit
@@ -858,7 +921,7 @@ get_info:
 	jmp %1
 	%endif
 
-	align 4
+	align 16
 
 %%call_prev_handler:
 	call prev_irq0_handler		; Call previous handler
@@ -873,23 +936,16 @@ get_info:
 
 
 ;------------------------------------------------------------------------------
-; Advance buffer position, flip buffer if end is reached.
+; Flip buffer if end is reached.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;    %1 - Number of bytes to add to ESI
-; <- Destroys AL, DX and ESI
+; -> ESI - Current buffer position
 ;------------------------------------------------------------------------------
 
-%macro	advance_buffer 1
+%macro	advance_buffer 0
 
-	%if (%1 != 0)
-	add esi, %1			; Skip bytes in buffer (right channel)
-	%endif
+	; Flip buffer if end is reached
 
-	; Save new buffer position, flip buffer if end is reached
-
-	mov [state(buffer_pos)], esi
-	cmp esi, [state(buffer_limit)]
+	cmp esi, [buffer_limit]
 	jae toggle_buffer
 
 %endmacro
@@ -899,20 +955,20 @@ get_info:
 ; Call the original IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	align 4
+	align 16
 
 prev_irq0_handler:
-	pushf
-	call 0x1234:0x1234
-	irq0_prev_handler EQU $ - 4
-	retn
+	pushfd
+	call 0x1234:0x12345678
+	irq0_prev_handler EQU $ - 6
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; PC speaker IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	align 4
+	align 16
 
 speaker_irq0_handler:
 	irq0_start
@@ -925,29 +981,33 @@ speaker_irq0_handler:
 
 	; Output next sample
 
-	mov esi, [state(buffer_pos)]
-	a32 lodsd
+	mov esi, [buffer_pos]
+	mov eax, [esi]
 	add eax, 0x8080			; Convert to unsigned
+	add esi, 8
 	test eax, 0xffff0000
 	jnz .clip			; Clipping
-	movzx eax, ah
-	mov al, [state(speakertab) + eax]
+	xor edx, edx
+	mov dl, ah
+	mov al, [speakertab + edx]
 	out 0x42, al
+	mov [buffer_pos], esi
 
-	advance_buffer 4
+	advance_buffer
 	irq0_eoi 0
 
-	align 4
+	align 16
 
 .clip:
+	xor edx, edx
 	cmp eax, 0
-	setg al				; AL: 1 if positive clip, else 0
-	neg al				; AL: 255 if positive clip, else 0
-	movzx eax, al
-	mov al, [state(speakertab) + eax]
+	setg dl				; AL: 1 if positive clip, else 0
+	neg dl				; AL: 255 if positive clip, else 0
+	mov al, [speakertab + edx]
 	out 0x42, al
+	mov [buffer_pos], esi
 
-	advance_buffer 4
+	advance_buffer
 	irq0_eoi 0
 
 
@@ -955,12 +1015,10 @@ speaker_irq0_handler:
 ; Mono LPT DAC IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	align 4
+	align 16
 
 lpt_dac_irq0_handler:
 	irq0_start
-
-	; DS: player instance segment
 
 	mov ax, 0x1234
 	lpt_dac_irq0_player_segment EQU $ - 2
@@ -968,28 +1026,31 @@ lpt_dac_irq0_handler:
 
 	; Output next sample
 
-	mov esi, [state(buffer_pos)]
-	a32 lodsd
-	mov dx, 0x1234
-	lpt_dac_irq0_port1 EQU $ - 2
+	mov esi, [buffer_pos]
+	mov eax, [esi]
+	mov edx, 0x12345678
+	lpt_dac_irq0_port1 EQU $ - 4
 	add eax, 0x8080			; Convert to unsigned
+	add esi, 8
 	test eax, 0xffff0000
 	jnz .clip			; Clipping
+	mov [buffer_pos], esi
 	mov al, ah
 	out dx, al
 
-	advance_buffer 4
+	advance_buffer
 	irq0_eoi 0
 
-	align 4
+	align 16
 
 .clip:
 	cmp eax, 0
 	setg al				; AL: 1 if positive clip, else 0
+	mov [buffer_pos], esi
 	neg al				; AL: 255 if positive clip, else 0
 	out dx, al
 
-	advance_buffer 4
+	advance_buffer
 	irq0_eoi 0
 
 
@@ -997,12 +1058,10 @@ lpt_dac_irq0_handler:
 ; Stereo LPT DAC output IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	align 4
+	align 16
 
 lpt_dac_stereo_irq0_handler:
 	irq0_start
-
-	; DS: player instance segment
 
 	mov ax, 0x1234
 	lpt_dac_stereo_irq0_player_segment EQU $ - 2
@@ -1010,20 +1069,24 @@ lpt_dac_stereo_irq0_handler:
 
 	; Output next sample
 
-	mov esi, [state(buffer_pos)]
-	mov dx, 0x1234
-	lpt_dac_stereo_irq0_ctrl_port EQU $ - 2
+	mov esi, [buffer_pos]
+	mov edx, 0x12345678
+	lpt_dac_stereo_irq0_ctrl_port EQU $ - 4
 
 	; Select DAC left channel
 
 	mov al, LPTST_CHN_LEFT
 	out dx, al
-	sub dx, 2
+	add esi, 8
+	sub edx, 2
 
 	; Output left channel sample
 
-	a32 lodsd			; Left channel sample
+	mov eax, [esi - 8]		; Left channel sample
+	mov [buffer_pos], esi
+	mov esi, [esi - 4]		; Right channel sample
 	add eax, 0x8080			; Convert to unsigned
+	add esi, 0x8080
 	test eax, 0xffff0000
 	jnz .clip_left			; Clipping
 	mov al, ah
@@ -1031,24 +1094,24 @@ lpt_dac_stereo_irq0_handler:
 
 	; Select DAC right channel
 
-	add dx, 2
+	add edx, 2
 	mov al, LPTST_CHN_RIGHT
 	out dx, al
-	sub dx, 2
+	sub edx, 2
 
 	; Output right channel sample
 
-	a32 lodsd			; Right channel sample
-	add eax, 0x8080			; Convert to unsigned
-	test eax, 0xffff0000
+	mov eax, esi
+	test esi, 0xffff0000
 	jnz .clip_right			; Clipping
 	mov al, ah
 	out dx, al
 
-	advance_buffer 0
+	mov esi, [buffer_pos]
+	advance_buffer
 	irq0_eoi 0
 
-	align 4
+	align 16
 
 .clip_left:
 	cmp eax, 0
@@ -1058,32 +1121,33 @@ lpt_dac_stereo_irq0_handler:
 
 	; Select DAC right channel
 
-	add dx, 2
+	add edx, 2
 	mov al, LPTST_CHN_RIGHT
 	out dx, al
-	sub dx, 2
+	sub edx, 2
 
 	; Output right channel sample
 
-	a32 lodsd			; Right channel
-	add eax, 0x8080			; Convert to unsigned
-	test eax, 0xffff0000
+	mov eax, esi
+	test esi, 0xffff0000
 	jnz .clip_right			; Clipping
 	mov al, ah
 	out dx, al
 
-	advance_buffer 0
+	mov esi, [buffer_pos]
+	advance_buffer
 	irq0_eoi 0
 
-	align 4
+	align 16
 
 .clip_right:
-	cmp eax, 0
+	cmp esi, 0
 	setg al				; AL: 1 if positive clip, else 0
 	neg al				; AL: 255 if positive clip, else 0
 	out dx, al
 
-	advance_buffer 0
+	mov esi, [buffer_pos]
+	advance_buffer
 	irq0_eoi 0
 
 
@@ -1091,12 +1155,10 @@ lpt_dac_stereo_irq0_handler:
 ; Dual LPT DAC output IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	align 4
+	align 16
 
 lpt_dac_dual_irq0_handler:
 	irq0_start
-
-	; DS: player instance segment
 
 	mov ax, 0x1234
 	lpt_dac_dual_irq0_player_segment EQU $ - 2
@@ -1104,29 +1166,33 @@ lpt_dac_dual_irq0_handler:
 
 	; Output next sample
 
-	mov esi, [state(buffer_pos)]
-	a32 lodsd			; Left channel
-	mov dx, 0x1234
-	lpt_dac_dual_irq0_port1 EQU $ - 2
+	mov esi, [buffer_pos]
+	mov edx, 0x1234
+	lpt_dac_dual_irq0_port1 EQU $ - 4
+	add esi, 8
+	mov eax, [esi - 8]		; Left channel sample
+	mov [buffer_pos], esi
+	mov esi, [esi - 4]		; Right channel sample
 	add eax, 0x8080			; Convert to unsigned
+	add esi, 0x8080
 	test eax, 0xffff0000
 	jnz .clip_left			; Clipping
 	mov al, ah
 	out dx, al
 
-	a32 lodsd			; Right channel
-	mov dx, 0x1234
-	lpt_dac_dual_irq0_port2a EQU $ - 2
-	add eax, 0x8080			; Convert to unsigned
-	test eax, 0xffff0000
+	mov eax, esi
+	mov edx, 0x1234
+	lpt_dac_dual_irq0_port2a EQU $ - 4
+	test esi, 0xffff0000
 	jnz .clip_right			; Clipping
 	mov al, ah
 	out dx, al
 
-	advance_buffer 0
+	mov esi, [buffer_pos]
+	advance_buffer
 	irq0_eoi 0
 
-	align 4
+	align 16
 
 .clip_left:
 	cmp eax, 0
@@ -1134,27 +1200,28 @@ lpt_dac_dual_irq0_handler:
 	neg al				; AL: 255 if positive clip, else 0
 	out dx, al
 
-	a32 lodsd			; Right channel
-	mov dx, 0x1234
-	lpt_dac_dual_irq0_port2b EQU $ - 2
-	add eax, 0x8080			; Convert to unsigned
-	test eax, 0xffff0000
+	mov edx, 0x1234
+	lpt_dac_dual_irq0_port2b EQU $ - 4
+	mov eax, esi
+	test esi, 0xffff0000
 	jnz .clip_right			; Clipping
 	mov al, ah
 	out dx, al
 
-	advance_buffer 0
+	mov esi, [buffer_pos]
+	advance_buffer
 	irq0_eoi 0
 
-	align 4
+	align 16
 
 .clip_right:
-	cmp eax, 0
+	cmp esi, 0
 	setg al				; AL: 1 if positive clip, else 0
 	neg al				; AL: 255 if positive clip, else 0
 	out dx, al
 
-	advance_buffer 0
+	mov esi, [buffer_pos]
+	advance_buffer
 	irq0_eoi 0
 
 
@@ -1162,12 +1229,10 @@ lpt_dac_dual_irq0_handler:
 ; Dual LPT DAC forced mono output IRQ 0 handler.
 ;------------------------------------------------------------------------------
 
-	align 4
+	align 16
 
 lpt_dac_dual_mono_irq0_handler:
 	irq0_start
-
-	; DS: player instance segment
 
 	mov ax, 0x1234
 	lpt_dac_dual_mono_irq0_player_segment EQU $ - 2
@@ -1175,36 +1240,39 @@ lpt_dac_dual_mono_irq0_handler:
 
 	; Output next sample
 
-	mov esi, [state(buffer_pos)]
-	a32 lodsd
-	mov dx, 0x1234
-	lpt_dac_dual_mono_irq0_port1 EQU $ - 2
+	mov esi, [buffer_pos]
+	mov edx, 0x1234
+	lpt_dac_dual_mono_irq0_port1 EQU $ - 4
+	mov eax, [esi]
+	add esi, 8
 	add eax, 0x8080			; Convert to unsigned
 	test eax, 0xffff0000
 	jnz .clip			; Clipping
+	mov [buffer_pos], esi
 	mov al, ah
 	out dx, al			; Left channel DAC
 
-	mov dx, 0x1234
-	lpt_dac_dual_mono_irq0_port2a EQU $ - 2
+	mov edx, 0x1234
+	lpt_dac_dual_mono_irq0_port2a EQU $ - 4
 	out dx, al			; Right channel DAC (same sample)
 
-	advance_buffer 4
+	advance_buffer
 	irq0_eoi 0
 
-	align 4
+	align 16
 
 .clip:
 	cmp eax, 0
 	setg al				; AL: 1 if positive clip, else 0
+	mov [buffer_pos], esi
 	neg al				; AL: 255 if positive clip, else 0
 	out dx, al			; Left channel DAC
 
-	mov dx, 0x1234
-	lpt_dac_dual_mono_irq0_port2b EQU $ - 2
+	mov edx, 0x1234
+	lpt_dac_dual_mono_irq0_port2b EQU $ - 4
 	out dx, al			; Right channel DAC (same sample)
 
-	advance_buffer 4
+	advance_buffer
 	irq0_eoi 0
 
 
@@ -1215,76 +1283,74 @@ lpt_dac_dual_mono_irq0_handler:
 ; <- Destroys AH and DX
 ;------------------------------------------------------------------------------
 
-	align 4
-
 toggle_buffer_render:
 
 	; Jumping here from toggle_buffer / .reset_buffer. Must be defined in
 	; advance, otherwise the macro throws an error.
 	; -> AH: new buffer status
 
-	cmp byte [state(buffer_status)], BUF_RENDERING
+	cmp byte [buffer_status], BUF_RENDERING
 	je .render_pending
 
 	; Render into update pending buffer part
 
-	push ax
+	push eax
 	push ebx
 	push ecx
 	push edi
 	push ebp
+	push es
+	mov ax, ds
+	mov es, ax			; ES: flat memory model data selector
 	sti				; Enable interrupts (important!)
 	call render			; Render audio into output buffer
 	cli				; Disable interrupts
+	pop es
 	pop ebp
 	pop edi
 	pop ecx
 	pop ebx
-	pop ax
+	pop eax
 
 	; Update pending buffer part unless a render was already in progress
 
-	cmp byte [state(buffer_status)], BUF_READY
+	cmp byte [buffer_status], BUF_READY
 	jne .exit
-	mov byte [state(buffer_status)], ah
+	mov byte [buffer_status], ah
+	mov al, ah
+	call update_buffer_position
 
 .exit:
 	irq0_exit
 
-	align 4
-
 .render_pending:
-	mov byte [state(buffer_pending)], ah
+	mov byte [buffer_pending], ah
 
 	irq0_exit
-
-	align 4
 
 toggle_buffer:
 
 	; End of buffer reached, play next part of the triple buffer
 
-	mov ah, [state(buffer_playprt)]
+	mov ah, [buffer_playprt]
 	inc ah
 	cmp ah, 2
 	ja .reset_buffer		; Re-init to first part
-	mov [state(buffer_playprt)], ah	; Continue to 2nd/3rd part
-	mov edx, [state(buffer_size)]
-	add [state(buffer_limit)], edx	; Adjust buffer upper limit for playback
+	mov [buffer_playprt], ah	; Continue to 2nd/3rd part
+	mov edx, [buffer_size]
+	add [buffer_limit], edx		; Adjust buffer upper limit for playback
 	add ah, BUF_RENDER_1 - 1	; Target render buffer: playing part - 1
 	irq0_eoi toggle_buffer_render
-
-	align 4
 
 .reset_buffer:
 
 	; Wrap back to first part of the buffer
 
-	mov byte [state(buffer_playprt)], 0
-	mov edx, [state(buffer_ofs)]
-	mov [state(buffer_pos)], edx
-	add edx, [state(buffer_size)]
-	mov [state(buffer_limit)], edx	; Buffer upper limit: end of 1st part
+	mov byte [buffer_playprt], 0
+	mov edx, [buffer_addr]
+	mov [buffer_pos], edx
+	add edx, [buffer_size]
+	mov [buffer_limit], edx		; Buffer upper limit: end of 1st part
 	mov ah, BUF_RENDER_3		; Target render buffer: 3rd part
 	irq0_eoi toggle_buffer_render
 
@@ -1293,25 +1359,57 @@ toggle_buffer:
 ; Data area
 ;==============================================================================
 
-		; Output device function pointers
+section .data
 
-		alignb 4
+		; Output device API jump table
 
-global mod_out_dac_fns
-mod_out_dac_fns	istruc mod_out_fns
-		set_out_fn(setup, setup)
-		set_out_fn(shutdown, shutdown)
-		set_out_fn(upload_sample, mod_swt_upload_sample)
-		set_out_fn(free_sample, mod_swt_free_sample)
-		set_out_fn(set_amplify, set_amplify)
-		set_out_fn(set_interpol, mod_swt_set_interpolation)
-		set_out_fn(set_stereomode, mod_swt_set_stereo_mode)
-		set_out_fn(play, play)
-		set_out_fn(stop, stop)
-		set_out_fn(set_tick_rate, set_tick_rate)
-		set_out_fn(set_mixer, set_mixer)
-		set_out_fn(set_sample, mod_swt_set_sample)
-		set_out_fn(render, render)
-		set_out_fn(get_mixer_info, mod_swt_get_mixer_info)
-		set_out_fn(get_info, get_info)
+global mod_dev_dac_api
+mod_dev_dac_api	istruc mod_dev_api
+		set_api_fn(setup, setup)
+		set_api_fn(shutdown, shutdown)
+		set_api_fn(upload_sample, mod_swt_upload_sample)
+		set_api_fn(free_sample, mod_swt_free_sample)
+		set_api_fn(set_channels, mod_swt_set_channels)
+		set_api_fn(set_amplify, set_amplify)
+		set_api_fn(set_interpol, mod_swt_set_interpolation)
+		set_api_fn(set_stereomode, mod_swt_set_stereo_mode)
+		set_api_fn(play, play)
+		set_api_fn(stop, stop)
+		set_api_fn(set_tick_rate, set_tick_rate)
+		set_api_fn(set_mixer, set_mixer)
+		set_api_fn(set_sample, mod_swt_set_sample)
+		set_api_fn(render, render)
+		set_api_fn(get_mixer_info, mod_swt_get_mixer_info)
+		set_api_fn(get_info, get_info)
+		set_api_fn(get_position, get_position)
+		set_api_fn(reset_channels, mod_swt_reset_channels)
 		iend
+
+section .bss
+
+position_info	resb mod_position_info.strucsize * 3
+params		resd (mod_dev_params.strucsize + 3) / 4
+period_base	resd 1			; Period to speed conversion base
+sample_rate	resd 1			; Actual playback sample rate
+buffer_addr	resd 1			; Linear address of output buffer
+buffer_size	resd 1			; Size of the output buffer
+buffer_limit	resd 1			; End of current playing buffer
+buffer_pos	resd 1			; Buffer playback position
+
+play_tickr_int	resd 1			; Number of samples between player ticks
+play_tickr_fr	resd 1			; Fraction part of the above
+play_sam_int	resd 1			; Number of samples until next tick
+play_sam_fr	resd 1			; Fraction part of the above
+amplify		resw 1			; Output amplification
+
+pit_rate	resw 1			; IRQ 0 rate
+pit_tick_count	resw 1			; Counter for old IRQ 0 handler callback
+
+buffer_playprt	resb 1			; Which of the double buffers is playing
+buffer_status	resb 1			; Flag to indicate need for rendering
+buffer_pending	resb 1			; Pending render into buffer
+dev_type	resb 1			; Output DAC device type
+output_format	resb 1			; Output bitstream format
+lpt_prn_ctrl	resb 1			; Old LPT printer controls byte value
+playing		resb 1			; Flag for playback ongoing
+speakertab	resb 256		; PC speaker PWM conversion lookup table

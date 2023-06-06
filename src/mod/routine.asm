@@ -1,9 +1,9 @@
 ;==============================================================================
-; MOD player - play routine
+; MOD player - Play routine
 ;------------------------------------------------------------------------------
 ; This is by no means perfect, ProTracker's playroutine is such a tangled mess
 ; that any attempt to introduce architecture and maintainability breaks it one
-; way or another. This will eventually be rewritten to align more with the
+; way or another. This might be rewritten (or not) to align more with the
 ; original Amiga code to have a better coverage on ProTracker quirks. For now
 ; this is alright and should play most MODs just fine.
 ;------------------------------------------------------------------------------
@@ -19,116 +19,153 @@
 
 cpu 386
 
-%include "mod/structs/global.inc"
-%include "mod/consts/routine.inc"
-%include "mod/consts/out.inc"
+section .text
+
+extern mod_file				; MOD file data
+extern mod_dev				; Output device API jump table
+
+%include "pmi/api/pmi.inc"
+%include "rtl/api/string.inc"
+%include "rtl/api/log.inc"
+
+%include "mod/config.inc"
 %include "mod/api/convert.inc"
-%include "debug/log.inc"
+%include "mod/structs/public.inc"
+%include "mod/structs/mod_file.inc"
+%include "mod/consts/dev.inc"
+%include "mod/structs/dev.inc"
 
 ; Shortcut macros for easier access to nested structures
 
-%define	state(var) mod.routine_state + mod_routine_state. %+ var
-%define	channel(var) mod_routine_channel. %+ var
+%define mod(var) mod_file + mod. %+ var
+%define	channel(var) channel. %+ var
 %define	sample(var) mod_sample. %+ var
-%define	out_fn(fn) mod.out_fns + mod_out_fns. %+ fn
+%define	dev(fn) mod_dev + mod_dev_api. %+ fn
 %define wflags(sample, mix) sample * 256 + mix
 
-segment modplayer public use16 class=CODE align=16
-segment modplayer
+; Playroutine state flags
+
+STATE_BREAK	EQU 0x01
+STATE_SET_POS	EQU 0x02
+STATE_SKIP	EQU 0x04
+
+; Internal state of the play routine for each channel
+
+struc		channel
+
+.flags:
+.mixer_flags	resb 1			; Mixer flags
+.sample_flags	resb 1			; Sample flags
+		resw 1			; Dummy filler for dword operations
+.current_note	resb 1			; Note in current row
+.note		resb 1			; Channel note
+.volume		resb 1			; Channel volume (0 - 64)
+.play_volume	resb 1			; Channel volume for playback
+.pan		resb 1			; Channel pan (0 - 255)
+.sample		resb 1			; Sample number (0 - 32)
+.finetune	resb 1			; Channel finetune
+.toneporta_dir	resb 1			; Tone portamento direction
+.toneporta_spd	resb 1			; Tone portamento speed
+.wave_control	resb 1			; Waveform control flags
+.vibrato_pos	resb 1			; Vibrato waveform position
+.vibrato_param	resb 1			; Vibrato command parameter
+.tremolo_pos	resb 1			; Tremolo waveform position
+.tremolo_param	resb 1			; Tremolo command parameter
+.glissando_flag	resb 1			; Glissando enable / disable
+		alignb 4
+.sample_ofs	resd 1			; Sample offset position (memory)
+.sample_pos	resd 1			; Sample playback start position
+.period		resd 1			; Note period
+.play_period	resd 1			; Note period for playback
+.effect		resd 1			; Effect command (lo) / parameter (hi)
+.toneporta_per	resd 1			; Wanted portamento note period
+.sample_hdr_ofs	resd 1			; Offset to sample header
+		alignb 4
+.strucsize:
+
+endstruc
 
 
 ;------------------------------------------------------------------------------
 ; Reset the playroutine.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;------------------------------------------------------------------------------
 
-	align 4
-
-global mod_playroutine_reset
-mod_playroutine_reset:
+global mod_playroutine_init
+mod_playroutine_init:
 	push eax
-	push cx
-	push si
-	push di
-	push es
+	push ecx
+	push edi
 
 	cld
 
 	; Zero out state memory
 
-	mov ax, ds
-	mov es, ax
-	mov di, mod.routine_state
-	mov cx, mod_routine_state.strucsize / 2
-	xor ax, ax
-	rep stosw
+	mov edi, state
+	mov ecx, STATE_SIZE / 4
+	xor eax, eax
+	rep stosd
 
 	; Initialize global state
 
-	mov al, [mod.bpm]
-	mov [state(bpm)], al
-	mov byte [state(speed)], 6
+	mov al, [mod(bpm)]
+	mov [bpm], al
+	mov byte [speed], 6
 
-	mov ah, [mod.bpm]
-	mov bl, ah
-	xor bh, bh
-	shl bx, 3
-	mov cx, bx
-	add bx, cx
-	add bx, cx			; BX: ticks per minute = BPM * 24
-	call [out_fn(set_tick_rate)]
+	mov ah, [mod(bpm)]
+	movzx ebx, ah
+	shl ebx, 3
+	lea ebx, [ebx * 2 + ebx]	; EBX: ticks per minute = BPM * 24
+	call [dev(set_tick_rate)]
 
-	movzx eax, byte [mod.sequence]
-	mov [state(pattern)], al
-	mov eax, [mod.pattern_addr + eax * 4]
-	mov [state(pattern_addr)], eax
+	xor eax, eax
+	mov al, [mod(sequence)]
+	mov [pattern], al
+	mov eax, [mod(pattern_addr) + eax * 4]
+	mov [pattern_addr], eax
 
 	; Initialize channel state
 
-	mov cl, [mod.num_channels]
-	xor ch, ch
-	mov si, state(channels)
+	mov al, [mod(num_channels)]
+	call [dev(set_channels)]
+	mov edi, channels
 
 .loop_reset_channel:
-	mov byte [si + channel(volume)], 64
-	mov byte [si + channel(play_volume)], 64
-	mov word [si + channel(sample_hdr_ofs)], -1
-	add si, mod_routine_channel.strucsize
-	dec cx
+	mov byte [edi + channel(volume)], 64
+	mov byte [edi + channel(play_volume)], 64
+	mov word [edi + channel(sample_hdr_ofs)], 0
+	add edi, channel.strucsize
+	dec al
 	jnz .loop_reset_channel
 
-	pop es
-	pop di
-	pop si
-	pop cx
+	pop edi
+	pop ecx
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Call effects as defined in an effect routine pointer table.
-; -> FS:%1 - Effect routine pointer table
+; -> %1 - Effect routine pointer table
 ;    DL - Effect command
-; <- Destroys BX
+;    DH - Effect parameter
+; <- Destroys EBX
 ;------------------------------------------------------------------------------
 
 %macro	call_fx 1
 
 	test dx, dx
 	jz %%no_fx
+	xor ebx, ebx
 	mov bl, dl
-	cmp bl, 0xe0
+	cmp dl, 0xe0
 	jb %%get_fx_fn
 	sub bl, 0xd0
 
 %%get_fx_fn:
-	xor bh, bh
-	add bx, bx
-	mov bx, fs:[%1 + bx]
-	test bx, bx
+	mov ebx, [%1 + ebx * 4]
+	test ebx, ebx
 	jz %%no_fx
-	call bx
+	call ebx
 
 %%no_fx:
 
@@ -141,7 +178,6 @@ mod_playroutine_reset:
 ; Ticks occur 6 times per pattern row normally, but this can be changed with
 ; the set speed (Fxx) command.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
 ; <- Destroys everything except segment registers
 ;------------------------------------------------------------------------------
 
@@ -149,31 +185,24 @@ mod_playroutine_reset:
 
 global mod_playroutine_tick
 mod_playroutine_tick:
-	push fs
-
-	cmp byte [state(speed)], 0	; Speed = 0 -> stop song
+	cmp byte [speed], 0		; Speed = 0 -> stop song
 	je .exit
 
 	; AL: channel number
-	; DS:SI: mod_routine_channel[] pointer
-	; DS:EDI: pointer to current pattern row
-	; FS: modplayer_data segment
+	; ESI: channel[] pointer
+	; EDI: pointer to current pattern row
 
-	mov ax, modplayer_data
-	mov fs, ax
 	xor al, al
-	mov si, state(channels)
-	mov edi, [state(pattern_addr)]
-
-	align 4
+	mov esi, channels
+	mov edi, [pattern_addr]
 
 .loop_channels:
 
 	; Reset flags
 
-	mov word [si + channel(flags)], 0
+	mov dword [esi + channel(flags)], 0
 
-	cmp byte [state(tick)], 0
+	cmp byte [tick], 0
 	jne .intra_tick
 
 	;----------------------------------------------------------------------
@@ -182,15 +211,16 @@ mod_playroutine_tick:
 
 	; Pattern delay, process related commands only
 
-	cmp byte [state(patt_del_count)], 0
+	cmp byte [patt_del_count], 0
 	ja .pattern_delay_tick
 
 	; Extract pattern row content for current channel
 
-	mov bx, [edi]			; BH: note, BL: instrument
-	mov dx, [edi + 2]		; DL: effect command, DH: effect param
-	mov [si + channel(effect)], dx	; Save effect
-	mov [si + channel(current_note)], bh
+	xor edx, edx
+	mov ebx, [edi]			; BH: note, BL: instrument
+	shld edx, ebx, 16		; DL: effect command, DH: effect param
+	mov [esi + channel(effect)], edx
+	mov [esi + channel(current_note)], bh
 
 	test bl, bl
 	jz .check_period
@@ -198,23 +228,21 @@ mod_playroutine_tick:
 	;----------------------------------------------------------------------
 	; Instrument number present
 
-	mov bp, bx			; BP: mod_sample[]
-	and bp, 0xff
-	dec bp
-	add bp, bp
+	movzx ebp, bl			; EBP: mod_sample[]
+	dec ebp
 
-	or word [si + channel(flags)], wflags(SMP_CHANGE, MIX_SET_VOL)
+	or dword [esi + channel(flags)], wflags(SMP_CHANGE, MIX_SET_VOL)
 
 	; Copy sample settings into channel state
 
-	mov bp, ds:[mod.sample_hdr_ofs + bp]
-	mov ah, ds:[bp + sample(volume)]
-	mov [si + channel(volume)], ah
-	mov [si + channel(play_volume)], ah
-	mov ah, ds:[bp + sample(finetune)]
-	mov [si + channel(finetune)], ah
-	mov ah, [si + channel(sample)]
-	mov [si + channel(sample)], bl
+	mov ebp, ds:[mod(sample_hdr_ofs) + ebp * 4]
+	mov ah, ds:[ebp + sample(volume)]
+	mov [esi + channel(volume)], ah
+	mov [esi + channel(play_volume)], ah
+	mov ah, ds:[ebp + sample(finetune)]
+	mov [esi + channel(finetune)], ah
+	mov ah, [esi + channel(sample)]
+	mov [esi + channel(sample)], bl
 
 	; Instant change if:
 	; - No instrument was played in the channel yet
@@ -228,13 +256,11 @@ mod_playroutine_tick:
 	cmp ah, bl
 	je .change_sample
 
-	; Instrument is not the same as the one currently playing, ProTracker
+	; If instrument is not the same as the one currently playing, ProTracker
 	; hot-swaps the sample when the current sample (loop) ends, but our
 	; wavetables don't support this feature.
 
 	jmp .change_sample
-
-	align 4
 
 .change_sample_tone_portamento:
 	cmp dl, 0x03
@@ -244,10 +270,10 @@ mod_playroutine_tick:
 
 	; Instant instrument change
 
-	mov [si + channel(sample_hdr_ofs)], bp
+	mov [esi + channel(sample_hdr_ofs)], ebp
 	cmp dl, 0x09
 	je .check_period
-	mov word [si + channel(sample_ofs)], 0
+	mov dword [esi + channel(sample_ofs)], 0
 
 .check_period:
 	test bh, bh
@@ -264,43 +290,35 @@ mod_playroutine_tick:
 	je .fx_tone_portamento_set
 	jmp .set_period
 
-	align 4
-
 .fx_finetune_period:			; E5y: set finetune
 	call fx_set_finetune
 	jmp .set_period
 
-	align 4
-
 .fx_tone_portamento_set:		; 3xy, 5xy: tone portamento (+ volslide)
-	mov ah, [si + channel(finetune)]
+	mov ah, [esi + channel(finetune)]
 	call mod_note_finetune
-	mov [si + channel(toneporta_per)], cx
-	mov byte [si + channel(toneporta_dir)], 0
-	cmp cx, [si + channel(period)]
+	mov [esi + channel(toneporta_per)], ecx
+	mov byte [esi + channel(toneporta_dir)], 0
+	cmp ecx, [esi + channel(period)]
 	je .fx_tone_portamento_clear
 	ja .note_fx
-	mov byte [si + channel(toneporta_dir)], 1
+	mov byte [esi + channel(toneporta_dir)], 1
 	jmp .note_fx
-
-	align 4
 
 .fx_tone_portamento_clear:
-	mov word [si + channel(toneporta_per)], 0
+	mov dword [esi + channel(toneporta_per)], 0
 	jmp .note_fx
-
-	align 4
 
 .set_period:
 
 	;----------------------------------------------------------------------
 	; Apply period
 
-	mov ah, [si + channel(finetune)]
+	mov ah, [esi + channel(finetune)]
 	call mod_note_finetune
-	mov [si + channel(note)], bh	; Save note
-	mov [si + channel(period)], cx	; Save period
-	mov [si + channel(play_period)], cx
+	mov [esi + channel(note)], bh
+	mov [esi + channel(period)], ecx
+	mov [esi + channel(play_period)], ecx
 
 	; Note delay, skip to effects
 
@@ -310,51 +328,45 @@ mod_playroutine_tick:
 	;----------------------------------------------------------------------
 	; Reset vibrato and tremolo waveform positions
 
-	mov ah, [si + channel(wave_control)]
+	mov ah, [esi + channel(wave_control)]
 	test ah, 0x04
 	jnz .reset_tremolo_pos
-	mov byte [si + channel(vibrato_pos)], 0
+	mov byte [esi + channel(vibrato_pos)], 0
 
 .reset_tremolo_pos:
-	mov ah, [si + channel(wave_control)]
+	mov ah, [esi + channel(wave_control)]
 	test ah, 0x40
 	jnz .set_wt_flags
-	mov byte [si + channel(tremolo_pos)], 0
+	mov byte [esi + channel(tremolo_pos)], 0
 
 .set_wt_flags:
-	or word [si + channel(flags)], wflags((SMP_SET_POS | SMP_CHANGE), MIX_SET_SPD)
-	xor bp, bp
+	or dword [esi + channel(flags)], wflags((SMP_SET_POS | SMP_CHANGE), MIX_SET_SPD)
+	xor ebp, ebp
 	test bl, bl
 	jnz .set_wt_sample_pos
-	mov bp, [si + channel(sample_ofs)]
+	mov ebp, [esi + channel(sample_ofs)]
 
 .set_wt_sample_pos:
-	mov word [si + channel(sample_pos)], bp
+	mov [esi + channel(sample_pos)], ebp
 	jmp .note_fx
-
-	align 4
 
 .pattern_delay_tick:
 
 	;----------------------------------------------------------------------
 	; Process effects in delayed pattern first tick
 
-	mov dx, [si + channel(effect)]
+	mov edx, [esi + channel(effect)]
 	call_fx fxtab_pattdel
 	jmp .set_wt
-
-	align 4
 
 .intra_tick:
 
 	;----------------------------------------------------------------------
 	; Process effects in subsequent ticks
 
-	mov dx, [si + channel(effect)]
+	mov edx, [esi + channel(effect)]
 	call_fx fxtab_intra
 	jmp .set_wt
-
-	align 4
 
 .note_fx:
 
@@ -364,18 +376,18 @@ mod_playroutine_tick:
 	; speed, this will only be done if the playback volume and period do
 	; not match the values from the pattern note.
 
-	mov ah, [si + channel(volume)]	; Reset volume
-	cmp [si + channel(play_volume)], ah
+	mov ah, [esi + channel(volume)]	; Reset volume
+	cmp [esi + channel(play_volume)], ah
 	je .check_period_reset
-	mov [si + channel(play_volume)], ah
-	or byte [si + channel(mixer_flags)], MIX_SET_VOL
+	mov [esi + channel(play_volume)], ah
+	or byte [esi + channel(mixer_flags)], MIX_SET_VOL
 
 .check_period_reset:
-	mov cx, [si + channel(period)]	; Reset period
-	cmp [si + channel(play_period)], cx
+	mov ecx, [esi + channel(period)]; Reset period
+	cmp [esi + channel(play_period)], ecx
 	je .apply_note_fx
-	mov [si + channel(play_period)], cx
-	or byte [si + channel(mixer_flags)], MIX_SET_SPD
+	mov [esi + channel(play_period)], ecx
+	or byte [esi + channel(mixer_flags)], MIX_SET_SPD
 
 .apply_note_fx:
 
@@ -389,103 +401,102 @@ mod_playroutine_tick:
 	;----------------------------------------------------------------------
 	; Program the wavetable
 
-	mov ah, [si + channel(sample_flags)]
+	mov ah, [esi + channel(sample_flags)]
 	test ah, ah
 	jz .set_mixer
 
 	; Update playing sample, sample position
 
-	push si
+	push esi
 	test ah, SMP_SET_POS
 	jz .no_retrig
 
 .no_retrig:
-	movzx ecx, word [si + channel(sample_pos)]
-	xor dx, dx
-	mov si, [si + channel(sample_hdr_ofs)]
-	call [out_fn(set_sample)]
-	pop si
+	mov ecx, [esi + channel(sample_pos)]
+	xor edx, edx
+	mov esi, [esi + channel(sample_hdr_ofs)]
+	call [dev(set_sample)]
+	pop esi
 
 .set_mixer:
-	mov ah, [si + channel(mixer_flags)]
+	mov ah, [esi + channel(mixer_flags)]
 	test ah, ah
 	jz .next_channel
 
 	; Update volume and playback speed (period, finetune)
 
-	mov bl, [si + channel(play_volume)]
-	mov bh, [si + channel(pan)]
-	mov cx, [si + channel(play_period)]
-	call [out_fn(set_mixer)]
+	mov bl, [esi + channel(play_volume)]
+	mov bh, [esi + channel(pan)]
+	mov ecx, [esi + channel(play_period)]
+	call [dev(set_mixer)]
 
 .next_channel:
-	add si, mod_routine_channel.strucsize
+	add esi, channel.strucsize
 	add edi, 4
 	inc al
-	cmp al, [mod.num_channels]
+	cmp al, [mod(num_channels)]
 	jb .loop_channels
 
 	; Next tick
 
-	mov al, [state(tick)]
+	mov al, [tick]
 	inc al
-	cmp al, [state(speed)]
+	cmp al, [speed]
 	jae .next_row
-	mov [state(tick)], al
+	mov [tick], al
 
 .exit:
-	pop fs
-	retn
+	ret
 
 .next_row:
 
 	;----------------------------------------------------------------------
 	; Row playback complete, step playback position forward
 
-	mov byte [state(tick)], 0
+	mov byte [tick], 0
 
 	; Check pattern delay
 
-	mov al, [state(patt_delay)]
+	mov al, [patt_delay]
 	test al, al
 	jz .check_pattern_delay
 	add al, 1
-	mov [state(patt_del_count)], al
-	mov byte [state(patt_delay)], 0
+	mov [patt_del_count], al
+	mov byte [patt_delay], 0
 
 .check_pattern_delay:
-	cmp byte [state(patt_del_count)], 0
+	cmp byte [patt_del_count], 0
 	je .no_pattern_delay
-	sub byte [state(patt_del_count)], 1
+	dec byte [patt_del_count]
 	jnz .exit
 
 .no_pattern_delay:
-	test byte [state(flags)], STATE_BREAK | STATE_SET_POS
+	test byte [flags], STATE_BREAK | STATE_SET_POS
 	jnz .pattern_jump
 
 .check_next_row:
-	mov [state(pattern_addr)], edi
-	mov al, [state(row)]
+	mov [pattern_addr], edi
+	mov al, [row]
 	inc al
 	cmp al, 64
 	jae .next_pattern
-	mov [state(row)], al
+	mov [row], al
 	jmp .exit
 
 .next_pattern:
-	mov byte [state(row)], 0
-	movzx ebx, byte [state(position)]
+	mov byte [row], 0
+	movzx ebx, byte [position]
 	inc bl
-	cmp bl, [mod.length]
+	cmp bl, [mod(length)]
 	jb .get_sequence
-	mov bl, [mod.restart_pos]
+	mov bl, [mod(restart_pos)]
 
 .get_sequence:
-	mov [state(position)], bl
-	mov bl, byte [mod.sequence + bx]
-	mov [state(pattern)], bl
-	mov eax, [mod.pattern_addr + ebx * 4]
-	mov [state(pattern_addr)], eax
+	mov [position], bl
+	mov bl, byte [mod(sequence) + ebx]
+	mov [pattern], bl
+	mov eax, [mod(pattern_addr) + ebx * 4]
+	mov [pattern_addr], eax
 	jmp .exit
 
 .pattern_jump:
@@ -494,81 +505,202 @@ mod_playroutine_tick:
 	; Pattern break or position jump effect encountered during playback,
 	; calculate new position
 
-	movzx ebx, byte [state(position)]
-	test byte [state(flags)], STATE_SET_POS
+	movzx ebx, byte [position]
+	test byte [flags], STATE_SET_POS
 	jnz .pattern_jump_pos
 	inc bl				; No new song position -> next pattern
 
 .check_jump_pos:
-	cmp bl, [mod.length]		; Restart song on position overflow
+	cmp bl, [mod(length)]		; Restart song on position overflow
 	jb .get_jump_sequence
-	mov bl, [mod.restart_pos]
+	mov bl, [mod(restart_pos)]
 
 .get_jump_sequence:
-	mov [state(position)], bl
-	mov bl, [mod.sequence + bx]
-	mov [state(pattern)], bl	; Get new pattern number
-	mov ebx, [mod.pattern_addr + ebx * 4]
-	movzx eax, byte [state(break_row)]
-	mov [state(row)], al		; Set new row
-	mul byte [mod.num_channels]
+	mov [position], bl
+	mov bl, [mod(sequence) + ebx]
+	mov [pattern], bl		; Get new pattern number
+	mov ebx, [mod(pattern_addr) + ebx * 4]
+	movzx eax, byte [break_row]
+	mov [row], al			; Set new row
+	mul byte [mod(num_channels)]
 	lea eax, [ebx + eax * 4]
-	mov [state(pattern_addr)], eax	; Set pattern offset
-	and byte [state(flags)], ~(STATE_BREAK | STATE_SET_POS)
-	test byte [state(flags)], STATE_SKIP
+	mov [pattern_addr], eax		; Set pattern offset
+	and byte [flags], ~(STATE_BREAK | STATE_SET_POS)
+	test byte [flags], STATE_SKIP
 	jz .exit
-	and byte [state(flags)], ~(STATE_SKIP)
-	mov edi, [state(pattern_addr)]
-	movzx eax, byte [mod.num_channels]
+	and byte [flags], ~(STATE_SKIP)
+	mov edi, [pattern_addr]
+	movzx eax, byte [mod(num_channels)]
 	lea edi, [edi + eax * 4]
 	jmp .check_next_row
 
 .pattern_jump_pos:
 	xor bl, bl			; Get new song position
-	xchg bl, [state(break_position)]
+	xchg bl, [break_position]
 	jmp .check_jump_pos
+
+
+;------------------------------------------------------------------------------
+; Get the current position within the song.
+;------------------------------------------------------------------------------
+; <- AH - Sequence entry (starting with 0)
+;    AL - Row within the sequence entry pattern (0 - 63)
+;    DL - Current tick within the row
+;------------------------------------------------------------------------------
+
+global mod_playroutine_get_position
+mod_playroutine_get_position:
+	mov ah, [position]
+	mov al, [row]
+	mov dl, [tick]
+	ret
+
+
+;------------------------------------------------------------------------------
+; Jump to a specific sequence entry within the song.
+;------------------------------------------------------------------------------
+; -> AH - New sequence entry (starting with 0)
+;    AL - New row within the sequence entry pattern
+;    DL - Set to 1 to stop currently playing samples
+; <- AH - New sequence entry (starting with 0)
+;    AL - New row within the sequence entry pattern (0 - 63)
+;------------------------------------------------------------------------------
+
+global mod_playroutine_set_position
+mod_playroutine_set_position:
+	push ebx
+	push ecx
+	push esi
+
+	cmp al, 63			; Limit row to 63
+	jbe .check_sequence
+	mov al, 63
+
+.check_sequence:
+	cmp ah, [mod(length)]		; Limit sequence to song length
+	jb .get_jump_sequence
+	mov ah, [mod(length)]
+	dec ah
+
+.get_jump_sequence:
+	and byte [flags], ~(STATE_BREAK | STATE_SET_POS | STATE_SKIP)
+	xor ebx, ebx			; Set playroutine tick rate when BPM
+
+	push eax
+
+	test ax, ax			; Reset speed and BPM when jumping to
+	jnz .stop_channels		; start of song
+	call mod_playroutine_init	; Re-initialize playroutine
+	call [dev(reset_channels)]	; Reset wavetable channels
+	jmp .set_sequence
+
+.stop_channels:
+	test dl, dl			; Stop playback in all channels when
+	jz .set_sequence		; requested (prevent stuck notes)
+
+	mov al, [mod(num_channels)]	; Stop playback in all channels
+	mov ah, 0x01			; Set sample
+	xor esi, esi			; Stop sample in channel
+
+.stop_channel_loop:
+	dec al				; AL: channel number
+	js .set_sequence
+	call [dev(set_sample)]
+	jmp .stop_channel_loop
+
+.set_sequence:
+	pop eax				; Restore target sequence and row number
+
+	xor ebx, ebx
+	mov bl, ah
+	mov [position], ah
+	mov bl, [mod(sequence) + ebx]
+	mov [pattern], bl		; Get new pattern number
+	mov ebx, [mod(pattern_addr) + ebx * 4]
+	mov [row], al			; Set new row
+	mov byte [tick], 0		; Set tick to 0
+	xor ecx, ecx
+	mov cl, al
+	mul byte [mod(num_channels)]
+	lea ecx, [ebx + ecx * 4]
+	mov [pattern_addr], ecx		; Set pattern offset
+
+.done:
+	pop esi
+	pop ecx
+	pop ebx
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Return information about channels.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-; -> ES:EDI - Pointer to buffer receiving mod_channel_info structures
-; <- ES:EDI - Filled with data
+; -> ESI - Pointer to buffer receiving mod_channel_info structures
+; <- ESI - Filled with data
 ;------------------------------------------------------------------------------
 
 	align 4
 
 global mod_playroutine_get_channel_info
 mod_playroutine_get_channel_info:
-	push ax
-	push bx
-	push si
+	push eax
+	push ebx
+	push esi
 	push edi
 
-	mov bl, [mod.num_channels]
-	mov si, state(channels)
+	mov bl, [mod(num_channels)]
+	mov edi, channels
 
 .loop_channel:
-	mov al, [si + channel(sample)]
-	mov es:[edi + mod_channel_info.sample], al
-	mov al, [si + channel(play_volume)]
-	mov es:[edi + mod_channel_info.volume], al
-	mov al, [si + channel(pan)]
-	mov es:[edi + mod_channel_info.pan], al
-	mov ax, [si + channel(play_period)]
-	mov es:[edi + mod_channel_info.period], ax
+	mov al, [edi + channel(sample)]
+	mov [esi + mod_channel_info.sample], al
+	mov al, [edi + channel(play_volume)]
+	mov [esi + mod_channel_info.volume], al
+	mov al, [edi + channel(pan)]
+	mov [esi + mod_channel_info.pan], al
+	mov eax, [edi + channel(play_period)]
+	mov [esi + mod_channel_info.period], eax
 
-	add si, mod_routine_channel.strucsize
-	add edi, mod_channel_info.strucsize
+	add edi, channel.strucsize
+	add esi, mod_channel_info.strucsize
 	dec bl
 	jnz .loop_channel
 
 	pop edi
-	pop si
-	pop bx
-	pop ax
-	retn
+	pop esi
+	pop ebx
+	pop eax
+	ret
+
+
+;------------------------------------------------------------------------------
+; Return current playback position of the MOD file.
+;------------------------------------------------------------------------------
+; -> ESI - Pointer to buffer receiving mod_position_info structure
+; <- ESI - Filled with data
+;------------------------------------------------------------------------------
+
+	align 4
+
+global mod_playroutine_get_position_info
+mod_playroutine_get_position_info:
+	push eax
+
+	mov al, [position]
+	mov [esi + mod_position_info.position], al
+	mov al, [pattern]
+	mov [esi + mod_position_info.pattern], al
+	mov al, [row]
+	mov [esi + mod_position_info.row], al
+	mov al, [tick]
+	mov [esi + mod_position_info.tick], al
+	mov al, [speed]
+	mov [esi + mod_position_info.speed], al
+	mov al, [bpm]
+	mov [esi + mod_position_info.bpm], al
+
+	pop eax
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -576,10 +708,8 @@ mod_playroutine_get_channel_info:
 ;------------------------------------------------------------------------------
 ; -> DL - Effect command
 ;    DH - Effect parameter
-;    DS - Player instance segment
-;    DS:SI - mod_routine_channel[] pointer for current channel
-;    FS - modplayer_data segment
-; <- Must keep AL, SI, EDI and segment registers, may trash everything else
+;    ESI - channel[] pointer for current channel
+; <- Must keep AL, ESI, EDI and segment registers, may trash everything else
 ;------------------------------------------------------------------------------
 
 
@@ -591,10 +721,10 @@ mod_playroutine_get_channel_info:
 	align 4
 
 fx_arpeggio:
-	mov bl, [state(tick)]
-	xor bh, bh
-	mov bl, fs:[arptab + bx]
-	mov bh, [si + channel(note)]
+	xor ebx, ebx
+	mov bl, [tick]
+	mov bl, [arptab + ebx]
+	mov bh, [esi + channel(note)]
 	cmp bl, 1
 	jb .use_note
 	ja .use_y
@@ -608,11 +738,11 @@ fx_arpeggio:
 
 .use_note:
 	add bh, bl
-	mov ah, [si + channel(finetune)]
+	mov ah, [esi + channel(finetune)]
 	call mod_note_finetune
-	mov [si + channel(play_period)], cx
-	or byte [si + channel(mixer_flags)], MIX_SET_SPD
-	retn
+	mov [esi + channel(play_period)], ecx
+	or byte [esi + channel(mixer_flags)], MIX_SET_SPD
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -623,20 +753,19 @@ fx_arpeggio:
 	align 4
 
 fx_portamento_up:
-	mov cx, [si + channel(period)]	; CX: period
-	mov dl, dh
-	xor dh, dh
-	mod_convert_period dx		; DX: period delta to subtract
-	sub cx, dx
-	cmp cx, mod_period(113) 	; ProTracker highest note - TODO
+	movzx edx, dh
+	mov ecx, [esi + channel(period)]
+	mod_convert_period edx		; EDX: period delta to subtract
+	sub ecx, edx
+	cmp ecx, mod_period(113)
 	jge .set_period
-	mov cx, mod_period(113)
+	mov ecx, mod_period(113)
 
 .set_period:
-	mov [si + channel(period)], cx
-	mov [si + channel(play_period)], cx
-	or byte [si + channel(mixer_flags)], MIX_SET_SPD
-	retn
+	mov [esi + channel(period)], ecx
+	mov [esi + channel(play_period)], ecx
+	or byte [esi + channel(mixer_flags)], MIX_SET_SPD
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -647,20 +776,19 @@ fx_portamento_up:
 	align 4
 
 fx_portamento_down:
-	mov cx, [si + channel(period)]	; CX: period
-	mov dl, dh
-	xor dh, dh
-	mod_convert_period dx		; DX: period delta to add
-	add cx, dx
-	cmp cx, mod_period(856)		; ProTracker lowest note - TODO
+	movzx edx, dh
+	mov ecx, [esi + channel(period)]
+	mod_convert_period edx		; EDX: period delta to add
+	add ecx, edx
+	cmp ecx, mod_period(856)
 	jbe .set_period
-	mov cx, mod_period(856)
+	mov ecx, mod_period(856)
 
 .set_period:
-	mov [si + channel(period)], cx
-	mov [si + channel(play_period)], cx
-	or byte [si + channel(mixer_flags)], MIX_SET_SPD
-	retn
+	mov [esi + channel(period)], ecx
+	mov [esi + channel(play_period)], ecx
+	or byte [esi + channel(mixer_flags)], MIX_SET_SPD
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -674,53 +802,52 @@ fx_portamento_down:
 fx_tone_portamento:
 	test dh, dh			; Save portamento speed
 	jz fx_tone_portamento_no_param
-	mov [si + channel(toneporta_spd)], dh
+	mov [esi + channel(toneporta_spd)], dh
 
 fx_tone_portamento_no_param:
-	mov bx, [si + channel(toneporta_per)]
-	test bx, bx			; BX: target period
+	mov ebx, [esi + channel(toneporta_per)]
+	test ebx, ebx			; EBX: target period
 	jz .exit			; No target period, exit
 
-	mov dl, [si + channel(toneporta_spd)]
-	xor dh, dh
-	mod_convert_period dx		; DX: period delta to add/subtract
-	mov cx, [si + channel(period)]	; CX: period
-	cmp byte [si + channel(toneporta_dir)], 0
+	movzx edx, byte [esi + channel(toneporta_spd)]
+	mov ecx, [esi + channel(period)]
+	mod_convert_period edx		; EDX: period delta to add/subtract
+	cmp byte [esi + channel(toneporta_dir)], 0
 	jne .tone_portamento_up
 
-	add cx, dx			; Pitch down -> add delta to period
-	cmp cx, bx
+	add ecx, edx			; Pitch down -> add delta to period
+	cmp ecx, ebx
 	jb .use_tone_portamento_period
 
 .use_final_period:
-	mov cx, bx			; Use target as period when reached
-	mov [si + channel(period)], cx
-	mov [si + channel(play_period)], cx
-	or byte [si + channel(mixer_flags)], MIX_SET_SPD
-	mov word [si + channel(toneporta_per)], 0
-	retn
+	mov ecx, ebx			; Use target as period when reached
+	mov [esi + channel(period)], ecx
+	mov [esi + channel(play_period)], ecx
+	or byte [esi + channel(mixer_flags)], MIX_SET_SPD
+	mov dword [esi + channel(toneporta_per)], 0
+	ret
 
 	align 4
 
 .tone_portamento_up:
-	sub cx, dx			; Pitch up -> subtract delta from period
-	cmp cx, bx
+	sub ecx, edx			; Pitch up -> subtract delta from period
+	cmp ecx, ebx
 	jle .use_final_period
 
 .use_tone_portamento_period:
-	mov [si + channel(period)], cx	; Apply intermediate period
+	mov [esi + channel(period)], ecx; Apply intermediate period
 
-	cmp byte [si + channel(glissando_flag)], 0
+	cmp byte [esi + channel(glissando_flag)], 0
 	je .no_glissando
-	mov ah, [si + channel(finetune)]
+	mov ah, [esi + channel(finetune)]
 	call mod_period_floor_seminote	; Glissando on: round down to semitone
 
 .no_glissando:
-	mov [si + channel(play_period)], cx
-	or byte [si + channel(mixer_flags)], MIX_SET_SPD
+	mov [esi + channel(play_period)], ecx
+	or byte [esi + channel(mixer_flags)], MIX_SET_SPD
 
 .exit:
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -735,7 +862,7 @@ fx_tone_portamento_no_param:
 fx_vibrato:
 	test dh, dh			; Update stored parameter
 	jz fx_vibrato_no_param
-	mov bl, [si + channel(vibrato_param)]
+	mov bl, [esi + channel(vibrato_param)]
 	mov dl, dh
 	and dl, 0x0f			; Update y
 	jz .set_x_param
@@ -749,14 +876,14 @@ fx_vibrato:
 	or bl, dh
 
 .update_memory:
-	mov [si + channel(vibrato_param)], bl
+	mov [esi + channel(vibrato_param)], bl
 
 fx_vibrato_no_param:
-	mov bl, [si + channel(vibrato_pos)]
+	mov bl, [esi + channel(vibrato_pos)]
 	mov dl, bl			; DL: vibrato position
 	shr bl, 2
 	and bl, 0x1f
-	mov bh, [si + channel(wave_control)]
+	mov bh, [esi + channel(wave_control)]
 	and bh, 0x03			; BH: vibrato waveform
 	jz .sine_wave
 	shl bl, 3			; BL: adjusted vibrato position
@@ -776,37 +903,38 @@ fx_vibrato_no_param:
 	align 4
 
 .sine_wave:
-	xor bh, bh			; Sine wave
-	mov bl, fs:[vibtab + bx]	; BL: vibrato multiplier
+	movzx ebx, bl			; Sine wave
+	mov bl, [vibtab + ebx]		; BL: vibrato multiplier
 
 .use_multiplier:
-	mov dh, [si + channel(vibrato_param)]
+	mov dh, [esi + channel(vibrato_param)]
 	mov bh, dh
 	and bh, 0x0f			; BH: vibrato depth
-	push ax				; Calculate period delta for vibrato
+	push eax			; Calculate period delta for vibrato
+	xor eax, eax
 	mov al, bl
 	mul bh
-	mov bx, ax
-	pop ax
-	mod_convert_period bx, -7	; BX: period delta
-	mov cx, [si + channel(period)]	; CX: period
+	mov ebx, eax
+	pop eax
+	mod_convert_period ebx, -7	; EBX: period delta
+	mov ecx, [esi + channel(period)]
 	test dl, 0x80
 	jnz .negative_wave
-	add cx, bx			; Positive vibrato -> decrease pitch
+	add ecx, ebx			; Positive vibrato -> decrease pitch
 	jmp .apply_delta
 
 	align 4
 
 .negative_wave:
-	sub cx, bx			; Negative vibrato -> increase pitch
+	sub ecx, ebx			; Negative vibrato -> increase pitch
 
 .apply_delta:
-	mov [si + channel(play_period)], cx
-	or byte [si + channel(mixer_flags)], MIX_SET_SPD
+	mov [esi + channel(play_period)], ecx
+	or byte [esi + channel(mixer_flags)], MIX_SET_SPD
 	shr dh, 2			; Update vibrato position
 	and dh, 0x3c
-	add [si + channel(vibrato_pos)], dh
-	retn
+	add [esi + channel(vibrato_pos)], dh
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -818,9 +946,9 @@ fx_vibrato_no_param:
 	align 4
 
 fx_tone_vol_slide:
-	push dx				; Call tone portamento without parameter
+	push edx			; Call tone portamento without parameter
 	call fx_tone_portamento_no_param
-	pop dx
+	pop edx
 	jmp fx_volume_slide		; Continue with volume slide
 
 
@@ -833,9 +961,9 @@ fx_tone_vol_slide:
 	align 4
 
 fx_vibrato_vol_slide:
-	push dx				; Call tone portamento without parameter
+	push edx			; Call tone portamento without parameter
 	call fx_vibrato_no_param
-	pop dx
+	pop edx
 	jmp fx_volume_slide		; Continue with volume slide
 
 
@@ -851,7 +979,7 @@ fx_vibrato_vol_slide:
 fx_tremolo:
 	test dh, dh			; Update stored parameter
 	jz .no_param
-	mov bl, [si + channel(tremolo_param)]
+	mov bl, [esi + channel(tremolo_param)]
 	mov dl, dh
 	and dl, 0x0f			; Update y
 	jz .set_x_param
@@ -865,14 +993,14 @@ fx_tremolo:
 	or bl, dh
 
 .update_memory:
-	mov [si + channel(tremolo_param)], bl
+	mov [esi + channel(tremolo_param)], bl
 
 .no_param:
-	mov bl, [si + channel(tremolo_pos)]
+	mov bl, [esi + channel(tremolo_pos)]
 	mov dl, bl			; DL: tremolo position
 	shr bl, 2
 	and bl, 0x1f
-	mov bh, [si + channel(wave_control)]
+	mov bh, [esi + channel(wave_control)]
 	and bh, 0x30			; BH: tremolo waveform
 	jz .sine_wave
 	shl bl, 3			; BL: adjusted tremolo position
@@ -884,7 +1012,7 @@ fx_tremolo:
 	align 4
 
 .ramp_down:
-	test byte [si + channel(vibrato_pos)], 0x80 ; Sawtooth
+	test byte [esi + channel(vibrato_pos)], 0x80 ; Sawtooth
 	; ^^^ Yes, this is a copy-paste monster from ProTracker. They forgot to
 	; update the variable name. The correct command here would be:
 	; test dl, 0x80
@@ -895,20 +1023,20 @@ fx_tremolo:
 	align 4
 
 .sine_wave:
-	xor bh, bh			; Sine wave
-	mov bl, fs:[vibtab + bx]	; BL: tremolo multiplier
+	movzx ebx, bl			; Sine wave
+	mov bl, [vibtab + ebx]		; BL: tremolo multiplier
 
 .use_multiplier:
-	mov dh, [si + channel(tremolo_param)]
+	mov dh, [esi + channel(tremolo_param)]
 	mov bh, dh
 	and bh, 0x0f			; BH: tremolo depth
-	push ax				; Calculate period delta for tremolo
-	mov al, bl
+	push eax			; Calculate period delta for tremolo
+	movzx eax, bl
 	mul bh
-	mov bx, ax
-	pop ax
-	shr bx, 6			; BL: volume delta
-	mov bh, [si + channel(volume)]	; BH: volume
+	mov ebx, eax
+	pop eax
+	shr ebx, 6			; BL: volume delta
+	mov bh, [esi + channel(volume)]	; BH: volume
 	test dl, 0x80
 	jnz .negative_wave
 	add bh, bl			; Positive tremolo -> decrease volume
@@ -925,12 +1053,12 @@ fx_tremolo:
 	xor bh, bh
 
 .apply_delta:
-	mov [si + channel(play_volume)], bh
-	or byte [si + channel(mixer_flags)], MIX_SET_VOL
+	mov [esi + channel(play_volume)], bh
+	or byte [esi + channel(mixer_flags)], MIX_SET_VOL
 	shr dh, 2			; Update tremolo position
 	and dh, 0x3c
-	add [si + channel(tremolo_pos)], dh
-	retn
+	add [esi + channel(tremolo_pos)], dh
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -942,9 +1070,9 @@ fx_tremolo:
 	align 4
 
 fx_set_fine_panning:
-	mov [si + channel(pan)], dh
-	or byte [si + channel(mixer_flags)], MIX_SET_PAN
-	retn
+	mov [esi + channel(pan)], dh
+	or byte [esi + channel(mixer_flags)], MIX_SET_PAN
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -957,16 +1085,16 @@ fx_set_fine_panning:
 fx_sample_offset:
 	test dh, dh
 	jz .no_offset			; No new position, do nothing
+	xor ebx, ebx
 	mov bh, dh			; New position, set it
-	xor bl, bl
-	mov [si + channel(sample_ofs)], bx
-	mov [si + channel(sample_pos)], bx
-	retn
+	mov [esi + channel(sample_ofs)], ebx
+	mov [esi + channel(sample_pos)], ebx
+	ret
 
 .no_offset:
-	mov bx, [si + channel(sample_ofs)]
-	mov [si + channel(sample_pos)], bx
-	retn
+	mov ebx, [esi + channel(sample_ofs)]
+	mov [esi + channel(sample_pos)], ebx
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -981,23 +1109,23 @@ fx_volume_slide:
 	test dh, 0x0f
 	jnz .slide_down
 	shr dh, 4			; Slide up
-	add dh, [si + channel(volume)]
+	add dh, [esi + channel(volume)]
 	cmp dh, 64
 	jbe .set_volume
 
 .slide_down:
 	mov dl, dh			; Slide down
 	and dl, 0x0f
-	mov dh, [si + channel(volume)]
+	mov dh, [esi + channel(volume)]
 	sub dh, dl
 	jns .set_volume
 	xor dh, dh
 
 .set_volume:
-	mov [si + channel(volume)], dh	; Apply new volume
-	mov [si + channel(play_volume)], dh
-	or byte [si + channel(mixer_flags)], MIX_SET_VOL
-	retn
+	mov [esi + channel(volume)], dh	; Apply new volume
+	mov [esi + channel(play_volume)], dh
+	or byte [esi + channel(mixer_flags)], MIX_SET_VOL
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1010,10 +1138,10 @@ fx_volume_slide:
 	align 4
 
 fx_position_jump:
-	mov [state(break_position)], dh	; Save target position
-	mov byte [state(break_row)], 0
-	or byte [state(flags)], STATE_BREAK | STATE_SET_POS
-	retn
+	mov [break_position], dh	; Save target position
+	mov byte [break_row], 0
+	or byte [flags], STATE_BREAK | STATE_SET_POS
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1029,10 +1157,10 @@ fx_set_volume:
 	mov dh, 64
 
 .use_volume:
-	or byte [si + channel(mixer_flags)], MIX_SET_VOL
-	mov [si + channel(volume)], dh
-	mov [si + channel(play_volume)], dh
-	retn
+	or byte [esi + channel(mixer_flags)], MIX_SET_VOL
+	mov [esi + channel(volume)], dh
+	mov [esi + channel(play_volume)], dh
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1059,14 +1187,14 @@ fx_pattern_break:
 	xor dl, dl
 
 .use_row:
-	mov [state(break_row)], dl
-	or byte [state(flags)], STATE_BREAK
-	cmp byte [state(patt_del_count)], 0
+	mov [break_row], dl
+	or byte [flags], STATE_BREAK
+	cmp byte [patt_del_count], 0
 	je .exit
-	or byte [state(flags)], STATE_SKIP
+	or byte [flags], STATE_SKIP
 
 .exit:
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1079,21 +1207,18 @@ fx_pattern_break:
 fx_set_speed:
 	cmp dh, 0x20
 	jae .set_bpm
-	mov [state(speed)], dh		; Set ticks per row
-	retn
+	mov [speed], dh			; Set ticks per row
+	ret
 
 	align 4
 
 .set_bpm:
-	mov [state(bpm)], dh		; Set tempo (BPM)
-	mov bl, dh
-	xor bh, bh
-	shl bx, 3
-	mov cx, bx
-	add bx, cx
-	add bx, cx			; BX: ticks per minute = BPM * 24
-	call [out_fn(set_tick_rate)]
-	retn
+	mov [bpm], dh			; Set tempo (BPM)
+	movzx ebx, dh
+	shl ebx, 3
+	lea ebx, [ebx * 2 + ebx]	; EBX: ticks per minute = BPM * 24
+	call [dev(set_tick_rate)]
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1106,8 +1231,8 @@ fx_set_speed:
 	align 4
 
 fx_glissando_ctrl:
-	mov [si + channel(glissando_flag)], dh
-	retn
+	mov [esi + channel(glissando_flag)], dh
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1124,11 +1249,11 @@ fx_glissando_ctrl:
 
 fx_set_vibrato_ctrl:
 	and dh, 0x0f
-	mov ah, [si + channel(wave_control)]
+	mov ah, [esi + channel(wave_control)]
 	and ah, 0xf0
 	or ah, dh
-	mov [si + channel(wave_control)], ah
-	retn
+	mov [esi + channel(wave_control)], ah
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1142,13 +1267,10 @@ fx_set_vibrato_ctrl:
 	align 4
 
 fx_set_finetune:
-	test dh, 0x08			; Extend to signed small int - this is
-	jz .save_finetune		; harmless since it's done anyways for
-	or dh, 0xf0			; this effect.
-
-.save_finetune:
-	mov [si + channel(finetune)], dh
-	retn
+	shl dh, 4			; Extend to signed small int - safe,
+	sar dh, 4			; since it's done anyways for this fx
+	mov [esi + channel(finetune)], dh
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1162,34 +1284,34 @@ fx_set_finetune:
 fx_pattern_loop:
 	test dh, dh
 	jz .set_loop
-	mov ah, [state(loop_count)]
+	mov ah, [loop_count]
 	test ah, ah
 	jz .start_loop
 	dec ah
-	mov [state(loop_count)], ah
+	mov [loop_count], ah
 	jz .exit
 
 .loop_jump:
-	mov dl, [state(loop_start_row)]
-	mov [state(break_row)], dl
-	mov dl, [state(position)]
-	mov [state(break_position)], dl
-	or byte [state(flags)], STATE_SET_POS | STATE_BREAK
+	mov dl, [loop_start_row]
+	mov [break_row], dl
+	mov dl, [position]
+	mov [break_position], dl
+	or byte [flags], STATE_SET_POS | STATE_BREAK
 
 .exit:
-	retn
+	ret
 
 	align 4
 
 .start_loop:
-	mov [state(loop_count)], dh
+	mov [loop_count], dh
 	jmp .loop_jump
 
 	align 4
 
 .set_loop:
-	mov ah, [state(row)]
-	mov [state(loop_start_row)], ah
+	mov ah, [row]
+	mov [loop_start_row], ah
 	jmp .exit
 
 
@@ -1208,11 +1330,11 @@ fx_pattern_loop:
 fx_set_tremolo_ctrl:
 	and dh, 0x0f
 	shl dh, 4
-	mov ah, [si + channel(wave_control)]
+	mov ah, [esi + channel(wave_control)]
 	and ah, 0x0f
 	or ah, dh
-	mov [si + channel(wave_control)], ah
-	retn
+	mov [esi + channel(wave_control)], ah
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1226,9 +1348,9 @@ fx_set_panning:
 	mov ah, dh
 	shl ah, 4
 	or ah, dh
-	mov [si + channel(pan)], ah
-	or byte [si + channel(mixer_flags)], MIX_SET_PAN
-	retn
+	mov [esi + channel(pan)], ah
+	or byte [esi + channel(mixer_flags)], MIX_SET_PAN
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1242,23 +1364,23 @@ fx_retrig_note:
 	cmp dh, 1
 	jb .exit			; x = 0: do nothing
 	je .retrig			; x = 1: retrig each tick
-	push ax
-	mov al, [state(tick)]
-	xor ah, ah
+	push eax
+	xor eax, eax
+	mov al, [tick]
 	div dh
 	mov dh, ah			; DH: tick MOD x
-	pop ax
+	pop eax
 	test dh, dh			; Remainder: not xth tick
 	jnz .exit
 
 .retrig:
-	mov word [si + channel(sample_pos)], 0
-	mov cx, [si + channel(period)]
-	mov [si + channel(play_period)], cx
-	or word [si + channel(flags)], wflags(SMP_SET_POS, MIX_SET_SPD)
+	mov dword [esi + channel(sample_pos)], 0
+	mov ecx, [esi + channel(period)]
+	mov [esi + channel(play_period)], ecx
+	or dword [esi + channel(flags)], wflags(SMP_SET_POS, MIX_SET_SPD)
 
 .exit:
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1293,14 +1415,14 @@ fx_fine_vol_down:
 	align 4
 
 fx_note_cut:
-	cmp [state(tick)], dh
+	cmp [tick], dh
 	jne .exit
-	mov byte [si + channel(volume)], 0
-	mov byte [si + channel(play_volume)], 0
-	or byte [si + channel(mixer_flags)], MIX_SET_VOL
+	mov byte [esi + channel(volume)], 0
+	mov byte [esi + channel(play_volume)], 0
+	or byte [esi + channel(mixer_flags)], MIX_SET_VOL
 
 .exit:
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1311,17 +1433,17 @@ fx_note_cut:
 	align 4
 
 fx_note_delay:
-	cmp [state(tick)], dh
+	cmp [tick], dh
 	jne .exit
-	cmp byte [si + channel(current_note)], 0
+	cmp byte [esi + channel(current_note)], 0
 	je .exit
-	mov word [si + channel(sample_pos)], 0
-	mov cx, [si + channel(period)]
-	mov [si + channel(play_period)], cx
-	or word [si + channel(flags)], wflags(SMP_SET_POS, MIX_SET_SPD)
+	mov dword [esi + channel(sample_pos)], 0
+	mov ecx, [esi + channel(period)]
+	mov [esi + channel(play_period)], ecx
+	or dword [esi + channel(flags)], wflags(SMP_SET_POS, MIX_SET_SPD)
 
 .exit:
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1332,123 +1454,121 @@ fx_note_delay:
 	align 4
 
 fx_pattern_delay:
-	mov [state(patt_delay)], dh
-	retn
+	mov [patt_delay], dh
+	ret
 
 
 ;==============================================================================
 ; Data area
 ;==============================================================================
 
-segment modplayer_data public use16 class=DATA align=16
-segment modplayer_data
+section .data
 
 		; Effects which should be processed on the first tick
 
-		alignb 2
-fxtab_note	dw 0			; 0xy: arpeggio
-		dw 0			; 1xx: portamento up
-		dw 0			; 2xx: portamento down
-		dw 0			; 3xx: tone portamento
-		dw 0			; 4xy: vibrato
-		dw 0			; 5xy: volume slide + tone portamento
-		dw 0			; 6xy: volume slide + vibrato
-		dw 0			; 7xy: tremolo
-		dw fx_set_fine_panning	; 8xx: set fine panning
-		dw fx_sample_offset	; 9xx: sample offset
-		dw 0			; Axy: volume slide
-		dw fx_position_jump	; Bxx: position jump
-		dw fx_set_volume	; Cxx: set volume
-		dw fx_pattern_break	; Dxx: pattern break
-		dw 0			; Padding
-		dw fx_set_speed		; Fxx: set speed / tempo
-		dw 0			; E0x: set filter
-		dw fx_portamento_up	; E1x: fine portamento up
-		dw fx_portamento_down	; E2x: fine portamento down
-		dw fx_glissando_ctrl	; E3x: glissando control
-		dw fx_set_vibrato_ctrl	; E4x: set vibrato waveform
-		dw fx_set_finetune	; E5x: set finetune
-		dw fx_pattern_loop	; E6x: pattern loop
-		dw fx_set_tremolo_ctrl	; E7x: set tremolo waveform
-		dw fx_set_panning	; E8x: set panning
-		dw fx_retrig_note	; E9x: retrigger
-		dw fx_fine_vol_up	; EAx: fine volume slide up
-		dw fx_fine_vol_down	; EBx: fine volume slide down
-		dw fx_note_cut		; ECx: note cut
-		dw fx_note_delay	; EDx: note delay
-		dw fx_pattern_delay	; EEx: pattern delay
-		dw 0			; EFx: invert loop
+fxtab_note	dd 0			; 0xy: arpeggio
+		dd 0			; 1xx: portamento up
+		dd 0			; 2xx: portamento down
+		dd 0			; 3xx: tone portamento
+		dd 0			; 4xy: vibrato
+		dd 0			; 5xy: volume slide + tone portamento
+		dd 0			; 6xy: volume slide + vibrato
+		dd 0			; 7xy: tremolo
+		dd fx_set_fine_panning	; 8xx: set fine panning
+		dd fx_sample_offset	; 9xx: sample offset
+		dd 0			; Axy: volume slide
+		dd fx_position_jump	; Bxx: position jump
+		dd fx_set_volume	; Cxx: set volume
+		dd fx_pattern_break	; Dxx: pattern break
+		dd 0			; Padding
+		dd fx_set_speed		; Fxx: set speed / tempo
+		dd 0			; E0x: set filter
+		dd fx_portamento_up	; E1x: fine portamento up
+		dd fx_portamento_down	; E2x: fine portamento down
+		dd fx_glissando_ctrl	; E3x: glissando control
+		dd fx_set_vibrato_ctrl	; E4x: set vibrato waveform
+		dd fx_set_finetune	; E5x: set finetune
+		dd fx_pattern_loop	; E6x: pattern loop
+		dd fx_set_tremolo_ctrl	; E7x: set tremolo waveform
+		dd fx_set_panning	; E8x: set panning
+		dd fx_retrig_note	; E9x: retrigger
+		dd fx_fine_vol_up	; EAx: fine volume slide up
+		dd fx_fine_vol_down	; EBx: fine volume slide down
+		dd fx_note_cut		; ECx: note cut
+		dd fx_note_delay	; EDx: note delay
+		dd fx_pattern_delay	; EEx: pattern delay
+		dd 0			; EFx: invert loop
 
 		; Effects which should be processed on subsequent ticks
 
-fxtab_intra	dw fx_arpeggio		; 0xy: arpeggio
-		dw fx_portamento_up	; 1xx: portamento up
-		dw fx_portamento_down	; 2xx: portamento down
-		dw fx_tone_portamento	; 3xx: tone portamento
-		dw fx_vibrato		; 4xy: vibrato
-		dw fx_tone_vol_slide	; 5xy: volume slide + tone portamento
-		dw fx_vibrato_vol_slide	; 6xy: volume slide + vibrato
-		dw fx_tremolo		; 7xy: tremolo
-		dw 0			; 8xx: set panning
-		dw 0			; 9xx: sample offset
-		dw fx_volume_slide	; Axy: volume slide
-		dw 0			; Bxx: position jump
-		dw 0			; Cxx: set volume
-		dw 0			; Dxx: pattern break
-		dw 0			; Padding
-		dw 0			; Fxx: set speed / tempo
-		dw 0			; E0x: set filter
-		dw 0			; E1x: fine portamento up
-		dw 0			; E2x: fine portamento down
-		dw 0			; E3x: glissando control
-		dw 0			; E4x: set vibrato waveform
-		dw 0			; E5x: set finetune
-		dw 0			; E6x: pattern loop
-		dw 0			; E7x: set tremolo waveform
-		dw 0			; E8x: set panning
-		dw fx_retrig_note	; E9x: retrigger
-		dw 0			; EAx: fine volume slide up
-		dw 0			; EBx: fine volume slide down
-		dw fx_note_cut		; ECx: note cut
-		dw fx_note_delay	; EDx: note delay
-		dw 0			; EEx: pattern delay
-		dw 0			; EFx: invert loop
+fxtab_intra	dd fx_arpeggio		; 0xy: arpeggio
+		dd fx_portamento_up	; 1xx: portamento up
+		dd fx_portamento_down	; 2xx: portamento down
+		dd fx_tone_portamento	; 3xx: tone portamento
+		dd fx_vibrato		; 4xy: vibrato
+		dd fx_tone_vol_slide	; 5xy: volume slide + tone portamento
+		dd fx_vibrato_vol_slide	; 6xy: volume slide + vibrato
+		dd fx_tremolo		; 7xy: tremolo
+		dd 0			; 8xx: set panning
+		dd 0			; 9xx: sample offset
+		dd fx_volume_slide	; Axy: volume slide
+		dd 0			; Bxx: position jump
+		dd 0			; Cxx: set volume
+		dd 0			; Dxx: pattern break
+		dd 0			; Padding
+		dd 0			; Fxx: set speed / tempo
+		dd 0			; E0x: set filter
+		dd 0			; E1x: fine portamento up
+		dd 0			; E2x: fine portamento down
+		dd 0			; E3x: glissando control
+		dd 0			; E4x: set vibrato waveform
+		dd 0			; E5x: set finetune
+		dd 0			; E6x: pattern loop
+		dd 0			; E7x: set tremolo waveform
+		dd 0			; E8x: set panning
+		dd fx_retrig_note	; E9x: retrigger
+		dd 0			; EAx: fine volume slide up
+		dd 0			; EBx: fine volume slide down
+		dd fx_note_cut		; ECx: note cut
+		dd fx_note_delay	; EDx: note delay
+		dd 0			; EEx: pattern delay
+		dd 0			; EFx: invert loop
 
 		; Effects which should be processed on the first tick during
 		; pattern delay
 
-fxtab_pattdel	dw fx_arpeggio		; 0xy: arpeggio
-		dw fx_portamento_up	; 1xx: portamento up
-		dw fx_portamento_down	; 2xx: portamento down
-		dw fx_tone_portamento	; 3xx: tone portamento
-		dw fx_vibrato		; 4xy: vibrato
-		dw fx_tone_vol_slide	; 5xy: volume slide + tone portamento
-		dw fx_vibrato_vol_slide	; 6xy: volume slide + vibrato
-		dw fx_tremolo		; 7xy: tremolo
-		dw 0			; 8xx: set panning
-		dw 0			; 9xx: sample offset
-		dw fx_volume_slide	; Axy: volume slide
-		dw fx_position_jump	; Bxx: position jump
-		dw 0			; Cxx: set volume
-		dw fx_pattern_break	; Dxx: pattern break
-		dw 0			; Padding
-		dw 0			; Fxx: set speed / tempo
-		dw 0			; E0x: set filter
-		dw fx_portamento_up	; E1x: fine portamento up
-		dw fx_portamento_down	; E2x: fine portamento down
-		dw 0			; E3x: glissando control
-		dw 0			; E4x: set vibrato waveform
-		dw 0			; E5x: set finetune
-		dw 0			; E6x: pattern loop
-		dw 0			; E7x: set tremolo waveform
-		dw 0			; E8x: set panning
-		dw 0			; E9x: retrigger
-		dw fx_fine_vol_up	; EAx: fine volume slide up
-		dw fx_fine_vol_down	; EBx: fine volume slide down
-		dw 0			; ECx: note cut
-		dw 0			; EDx: note delay
-		dw 0			; EEx: pattern delay
-		dw 0			; EFx: invert loop
+fxtab_pattdel	dd fx_arpeggio		; 0xy: arpeggio
+		dd fx_portamento_up	; 1xx: portamento up
+		dd fx_portamento_down	; 2xx: portamento down
+		dd fx_tone_portamento	; 3xx: tone portamento
+		dd fx_vibrato		; 4xy: vibrato
+		dd fx_tone_vol_slide	; 5xy: volume slide + tone portamento
+		dd fx_vibrato_vol_slide	; 6xy: volume slide + vibrato
+		dd fx_tremolo		; 7xy: tremolo
+		dd 0			; 8xx: set panning
+		dd 0			; 9xx: sample offset
+		dd fx_volume_slide	; Axy: volume slide
+		dd fx_position_jump	; Bxx: position jump
+		dd 0			; Cxx: set volume
+		dd fx_pattern_break	; Dxx: pattern break
+		dd 0			; Padding
+		dd 0			; Fxx: set speed / tempo
+		dd 0			; E0x: set filter
+		dd fx_portamento_up	; E1x: fine portamento up
+		dd fx_portamento_down	; E2x: fine portamento down
+		dd 0			; E3x: glissando control
+		dd 0			; E4x: set vibrato waveform
+		dd 0			; E5x: set finetune
+		dd 0			; E6x: pattern loop
+		dd 0			; E7x: set tremolo waveform
+		dd 0			; E8x: set panning
+		dd 0			; E9x: retrigger
+		dd fx_fine_vol_up	; EAx: fine volume slide up
+		dd fx_fine_vol_down	; EBx: fine volume slide down
+		dd 0			; ECx: note cut
+		dd 0			; EDx: note delay
+		dd 0			; EEx: pattern delay
+		dd 0			; EFx: invert loop
 
 		; Vibrato/tremolo sine table
 
@@ -1461,3 +1581,25 @@ vibtab		db   0,  24,  49,  74,  97, 120, 141, 161
 
 arptab		db 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2
 		db 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2
+
+section .bss
+
+state:
+pattern_addr	resd 1			; Current playing pattern address
+channels	resb (channel.strucsize * MOD_MAX_CHANS)
+
+flags		resb 1			; Playback state flags
+bpm		resb 1			; Current BPM
+speed		resb 1			; Current speed (ticks/row)
+tick		resb 1			; Current tick
+pattern		resb 1			; Current playing pattern
+row		resb 1			; Current playing row
+position	resb 1			; Current (pattern) sequence position
+break_row	resb 1			; Wanted row after break
+break_position	resb 1			; Wanted sequence position after break
+patt_delay	resb 1			; Wanted pattern delay
+patt_del_count	resb 1			; Pattern delay counter
+loop_start_row	resb 1			; Start row of pattern loop
+loop_count	resb 1			; Pattern loop count
+		alignb 4
+		STATE_SIZE EQU $ - state

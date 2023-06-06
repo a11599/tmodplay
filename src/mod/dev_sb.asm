@@ -13,32 +13,34 @@
 ; negligible overhead due to DMA transfers.
 ;==============================================================================
 
-cpu 386
+	cpu 386
 
-%include "system/api/memory.inc"
-%include "system/api/pic.inc"
-%include "system/api/dma.inc"
-%include "system/api/env.inc"
-%include "system/api/string.inc"
-%include "mod/consts/global.inc"
-%include "mod/consts/public.inc"
-%include "mod/structs/global.inc"
-%include "mod/structs/out_sb.inc"
-%include "mod/consts/out.inc"
-%include "mod/consts/out_sb.inc"
-%include "mod/api/convert.inc"
+section .text
+
+%include "pmi/api/pmi.inc"
+%include "rtl/api/env_arg.inc"
+%include "rtl/api/string.inc"
+%include "rtl/api/log.inc"
+%include "rtl/api/irq.inc"
+%include "rtl/api/systimer.inc"
+
+%include "mod/config.inc"
 %include "mod/api/wtbl_sw.inc"
 %include "mod/api/routine.inc"
-%include "debug/log.inc"
+%include "mod/structs/public.inc"
+%include "mod/consts/public.inc"
+%include "mod/structs/dev.inc"
+%include "mod/consts/dev.inc"
+
+%ifdef MOD_USE_PROFILER
+extern mod_perf_ticks
+%include "rtl/api/profiler.inc"
+%endif
 
 ; Shortcut macros for easier access to nested structures
 
-%define	state(var) mod.out_state + mod_out_sb_state. %+ var
-%define	params(var) mod.out_params + mod_out_params. %+ var
-%define	set_out_fn(name, lbl) at mod_out_fns. %+ name, dw %+ (lbl)
-
-segment modplayer public use16 class=CODE align=16
-segment modplayer
+%define	params(var) params + mod_dev_params. %+ var
+%define	set_api_fn(name, lbl) at mod_dev_api. %+ name, dd %+ (lbl)
 
 
 ;------------------------------------------------------------------------------
@@ -98,13 +100,11 @@ segment modplayer
 ; Detects the presence and parameters of a Sound Blaster device using the
 ; BLASTER environment variable.
 ;------------------------------------------------------------------------------
-; -> DS:EBX - mod_out_params structure receiving detected parameters
+; -> EBX - mod_dev_params structure receiving detected parameters
 ; <- CF - Set if Sound Blaster is not present
 ;    AL - Device type when CF not set (MOD_SB_*)
-;    DS:EBX - Filled with Sound Blaster-specific parameters when CF not set
+;    EBX - Filled with Sound Blaster-specific parameters when CF not set
 ;------------------------------------------------------------------------------
-
-	align 4
 
 global mod_sb_detect
 mod_sb_detect:
@@ -113,31 +113,24 @@ mod_sb_detect:
 	push esi
 	push edi
 	push ebp
-	push ds
-	push es
 	push eax
 
-	cld
-
-	mov ax, ds
-	mov es, ax			; ES:EBX: mod_out_params pointer
-	mov ax, cs
-	mov ds, ax
-	mov ebp, ebx			; ES:EBP: mod_out_params pointer
+	mov ebp, ebx			; EBP: mod_dev_params pointer
 
 	; Initialize detected values
 
-	xor di, di			; DI: port
-	xor dx, dx			; DL: 8-bit DMA, DH: 16-bit DMA
+	xor edi, edi			; DI: port
+	xor edx, edx			; DL: 8-bit DMA, DH: 16-bit DMA
 	xor cl, cl			; CL: IRQ
 	mov ch, -1			; CH: type
 
-	mov esi, blaster_env		; DS:ESI: "BLASTER"
-	call far sys_env_get_var
+	mov esi, blaster_env		; ESI: "BLASTER"
+	call env_get_value
 	jc .error			; No environment variable, bail out
 
 .get_params_loop:
-	a32 lodsb			; Get next character
+	mov al, [esi]			; Get next character
+	inc esi
 
 .check_param_type:
 	test al, al			; End of variable value, sanity check
@@ -151,11 +144,11 @@ mod_sb_detect:
 	; Axxx: I/O port address
 
 	mov bx, 0xff20			; Terminate on space or NUL
-	call far sys_str_parse_hex	; Parse value after "A"
+	call str_parse_hex		; Parse value after "A"
 	jc .error
 	cmp eax, 0xfff0			; Can't be above FFF0
 	ja .error
-	mov di, ax			; Store I/O port
+	mov edi, eax			; Store I/O port
 	jmp .next_param
 
 .check_8bit_dma:
@@ -165,7 +158,7 @@ mod_sb_detect:
 	; Dx: 8-bit DMA channel
 
 	mov bx, 0xff20			; Terminate on space or NUL
-	call far sys_str_parse_int	; Parse value after "D"
+	call str_parse_int		; Parse value after "D"
 	jc .error
 	cmp eax, 7			; Can't be above 7
 	ja .error
@@ -179,7 +172,7 @@ mod_sb_detect:
 	; Hx: 16-bit DMA channel
 
 	mov bx, 0xff20			; Terminate on space or NUL
-	call far sys_str_parse_int	; Parse value after "H"
+	call str_parse_int		; Parse value after "H"
 	jc .error
 	cmp eax, 7			; Can't be above 7
 	ja .error
@@ -193,7 +186,7 @@ mod_sb_detect:
 	; Ixx: IRQ number
 
 	mov bx, 0xff20			; Terminate on space or NUL
-	call far sys_str_parse_int	; Parse value after "I"
+	call str_parse_int		; Parse value after "I"
 	jc .error
 	cmp eax, 15			; Can't be above 15
 	ja .error
@@ -207,7 +200,7 @@ mod_sb_detect:
 	; Tx: Sound Blaster card type
 
 	mov bx, 0xff20			; Terminate on space or NUL
-	call far sys_str_parse_int	; Parse value after "T"
+	call str_parse_int		; Parse value after "T"
 	jc .error
 	mov ch, MOD_SB_1
 	cmp al, 1			; 1: Sound Blaster
@@ -222,7 +215,8 @@ mod_sb_detect:
 	mov ch, MOD_SB_16		; 6+: Sound Blaster 16 or newer
 
 .next_param:
-	a32 lodsb			; Skip to next parameter in variable
+	mov al, [esi]			; Skip to next parameter in variable
+	inc esi
 	test al, al
 	jz .check_params
 	cmp al, " "
@@ -233,7 +227,7 @@ mod_sb_detect:
 
 	; Check if enough parameters were read from the environment variable
 
-	test di, di			; I/O port address
+	test edi, edi			; I/O port address
 	jz .error
 	test cl, cl			; IRQ
 	jz .error
@@ -246,35 +240,33 @@ mod_sb_detect:
 	mov dh, dl
 
 .save_params:
-	mov ebx, ebp			; ES:EBX: mod_out_params pointer
+	mov ebx, ebp			; EBX: mod_dev_params pointer
 
 	; Attempt to reset the DSP of the Sound Blaster as a sanity test of
 	; variables parsed from BLASTER environment variable
 
-	mov bp, dx
-	mov dx, di
+	mov ebp, edx
+	mov edx, edi
 	call reset_dsp
 	jc .error			; Failed, Sound Blaster not present
 
 	; Save parsed parameter values
 
-	mov es:[ebx + mod_out_params.port], di
-	mov es:[ebx + mod_out_params.irq], cl
-	mov es:[ebx + mod_out_params.dma], bp
+	mov [ebx + mod_dev_params.port], di
+	mov [ebx + mod_dev_params.irq], cl
+	mov [ebx + mod_dev_params.dma], bp
 
 	pop eax
 	mov al, ch			; Return device type in AL
 	clc
 
 .exit:
-	pop es
-	pop ds
 	pop ebp
 	pop edi
 	pop esi
 	pop edx
 	pop ecx
-	retf
+	ret
 
 .error:
 	pop eax
@@ -286,9 +278,9 @@ mod_sb_detect:
 ; Set up the Sound Blaster output device.
 ;------------------------------------------------------------------------------
 ; -> AL - Output device type (MOD_SB_*)
-;    CX - Amplification as 8.8-bit fixed point value
+;    EBX - Pointer to mod_dev_params structure
+;    CH.CL - Amplification in 8.8-bit fixed point format
 ;    EDX - Requested sample rate
-;    DS - Player instance segment
 ; <- CF - Set if error
 ;    EAX - Error code if CF set or actual sample rate
 ;    EBX - Number of extra samples that will be generated at the end of each
@@ -297,17 +289,27 @@ mod_sb_detect:
 ;          each sample (must reserve enough space) if no error
 ;------------------------------------------------------------------------------
 
-	align 4
-
 setup:
 	push edx
+	push esi
+	push edi
 	push ebx
 	push ecx
 
+	cld
+
+	mov [dev_type], al
+	mov [amplify], cx
+
+	; Copy parameters to local instance
+
+	mov esi, ebx
+	mov edi, params
+	mov ecx, (mod_dev_params.strucsize + 3) / 4
+	rep movsd
+
 	; Validate configuration
 
-	mov [state(dev_type)], al
-	mov [state(amplify)], cx
 	cmp al, MOD_SB_16
 	ja .unknown_device
 	cmp edx, 8000			; Force minimum 8 kHz samplerate (which
@@ -354,16 +356,15 @@ setup:
 	or ah, FMT_MONO
 
 .use_output_format:
-	mov byte [state(output_format)], ah
+	mov [output_format], ah
 
-	%ifdef __DEBUG__
+	%if (LOG_LEVEL >= LOG_INFO)
 
-	; Show configuration when debug is enabled
+	; Log configuration
 
 	movzx ecx, al
-	movzx ecx, word cs:[types + ecx * 2]
 	mov al, [params(dma)]
-	cmp byte [state(dev_type)], MOD_SB_16
+	cmp byte [dev_type], MOD_SB_16
 	jne .log_sb
 	mov ah, [params(dma) + 1]
 	test ah, ah
@@ -371,7 +372,7 @@ setup:
 	mov al, ah
 
 .log_sb:
-	log {'Output device: Sound Blaster{s} on port {X16}h, IRQ {u8}, DMA {u8}', 13, 10}, cs, ecx, [params(port)], [params(irq)], al
+	log LOG_INFO, {'Output device: Sound Blaster{s} on port 0x{X16}, IRQ {u8}, DMA {u8}', 13, 10}, [types + ecx * 4], [params(port)], [params(irq)], al
 
 	%endif
 
@@ -379,10 +380,10 @@ setup:
 
 	; Reset Sound Blaster DSP
 
-	push dx
+	push edx
 	mov dx, [params(port)]
 	call reset_dsp
-	pop dx
+	pop edx
 	jc .sb_error
 
 .calc_sample_rate:
@@ -390,13 +391,13 @@ setup:
 	; Calculate time constant/actual sample rate
 
 	mov eax, edx			; SB16 can use sample rate directly
-	cmp byte [state(dev_type)], MOD_SB_16
+	cmp byte [dev_type], MOD_SB_16
 	je .use_sample_rate
 
 	; Time constant only for SB/SB Pro
 
 	xor cl, cl
-	cmp byte [state(dev_type)], MOD_SB_PRO
+	cmp byte [dev_type], MOD_SB_PRO
 	jne .mono_time_constant
 	cmp byte [params(stereo_mode)], MOD_PAN_MONO
 	setne cl			; CL: 1 if SB Pro (stereo), else 0
@@ -411,7 +412,7 @@ setup:
 	xor al, al
 	mov edx, 65536
 	sub edx, eax
-	mov [state(time_constant)], dh	; Save time constant
+	mov [time_constant], dh		; Save time constant
 	mov ebx, eax
 	shl ebx, cl			; * 2 for SB Pro stereo output
 	mov eax, 256000000
@@ -424,7 +425,7 @@ setup:
 	add eax, edx
 
 .use_sample_rate:
-	mov [state(sample_rate)], eax	; Save actual sample rate
+	mov [sample_rate], eax		; Save actual sample rate
 
 	; Calculate period -> SW wavetable speed conversion base
 
@@ -437,14 +438,12 @@ setup:
 	setae dl
 	movzx edx, dl			; EDX: 1 when yes, 0 otherwise
 	add eax, edx
-	mov [state(period_base)], eax
-
-	log {'Sound Blaster initialized successfully', 13, 10}
+	mov [period_base], eax
 
 	; Allocate memory for the output buffer
 
-	mov eax, [state(sample_rate)]	; Convert microsec to buffer size
-	movzx ebx, word [params(buffer_size)]
+	mov eax, [sample_rate]		; Convert microsec to buffer size
+	mov ebx, [params(buffer_size)]
 	cmp ebx, 1000000
 	jae .limit_buffer_size
 	mul ebx
@@ -463,52 +462,50 @@ setup:
 	mov eax, 5456
 
 .use_buffer_size:
-	mov [params(buffer_size)], ax
+	mov [params(buffer_size)], eax
 
 	mov ebx, eax
-	test byte [state(output_format)], FMT_16BIT
+	test byte [output_format], FMT_16BIT
 	setnz cl			; CL: 1 when 16 bit, else 0
-	test byte [state(output_format)], FMT_STEREO
+	test byte [output_format], FMT_STEREO
 	setnz ch			; CH: 1 when stereo, else 0
 	add cl, ch
 	shl ebx, cl			; Calculate buffer size in bytes
-	mov [state(buffer_size)], ebx
-	lea ebx, [ebx + ebx * 2]	; Triple buffering
-	mov al, SYS_MEM_DMA
-	call far sys_mem_alloc
+	mov [shl_per_sample], cl	; Save shift left count per sample
+	mov [buffer_size], ebx
+	lea ecx, [ebx + ebx * 2]	; Triple buffering
+	mov al, PMI_MEM_DMA
+	call pmi(mem_alloc)
 	jc .error
-	mov [state(buffer_addr)], eax
+	mov [buffer_addr], eax
+	mov [dma_addr], ebx
 
-	log {'Allocated {u} bytes for output device DMA buffer @{X}', 13, 10}, ebx, eax
+	log LOG_DEBUG, {'Allocated {u} bytes for output device DMA buffer at 0x{X}', 13, 10, 'DMA buffer physical address: 0x{X}', 13, 10}, ecx, eax, ebx
 
 	; Setup wavetable
 
 	mov al, [params(interpolation)]
 	mov ah, [params(stereo_mode)]
-	mov bx, [state(amplify)]
-	mov cx, [params(buffer_size)]
-	mov dl, [state(output_format)]
+	mov bx, [amplify]
+	mov ecx, [params(buffer_size)]
+	mov dl, [output_format]
 	mov dh, [params(initial_pan)]
 	call mod_swt_setup
 	jc .error
-	mov [state(amplify)], bx
+	mov [amplify], bx
 	mov ebx, eax
 
 	; Done
 
-	add sp, 8			; Discard EBX and ECX from stack
-	mov eax, [state(sample_rate)]
+	add esp, 8			; Discard EBX and ECX from stack
+	mov eax, [sample_rate]
 	clc
 
 .exit:
+	pop edi
+	pop esi
 	pop edx
-	retn
-
-.error:
-	pop ecx
-	pop ebx
-	stc
-	jmp .exit
+	ret
 
 .sb_error:
 	mov eax, MOD_ERR_DEVICE
@@ -516,20 +513,23 @@ setup:
 
 .unknown_device:
 	mov eax, MOD_ERR_DEV_UNK
-	jmp .error
+
+.error:
+	pop ecx
+	pop ebx
+	stc
+	jmp .exit
 
 
 ;------------------------------------------------------------------------------
 ; Shutdown the output device. No further playback is possible until the setup
 ; function is called again.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;------------------------------------------------------------------------------
-
-	align 4
 
 shutdown:
 	push eax
+
+	log LOG_INFO, {'Shutting down Sound Blaster output device', 13, 10}
 
 	; Shutdown wavetable
 
@@ -537,46 +537,42 @@ shutdown:
 
 	; Release memory
 
-	mov eax, [state(buffer_addr)]
+	mov eax, [buffer_addr]
 	test eax, eax
 	jz .done
 
-	log {'Disposing output device DMA buffer @{X}', 13, 10}, eax
+	log LOG_DEBUG, {'Disposing output device DMA buffer at 0x{X}', 13, 10}, eax
 
-	call far sys_mem_free
-	mov dword [state(buffer_addr)], 0
+	call pmi(mem_free)
+	mov dword [buffer_addr], 0
 
 .done:
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Set the amplification level.
 ;------------------------------------------------------------------------------
 ; -> AH.AL - Requested audio amplification in 8.8 fixed point value
-;    DS - Player instance segment
 ; <- AH.AL - Actual audio amplification level
 ;------------------------------------------------------------------------------
 
 	align 4
 
 set_amplify:
-	mov [state(amplify)], ax
+	mov [amplify], ax
 	call mod_swt_set_amplify
-	mov [state(amplify)], ax
+	mov [amplify], ax
 
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Start playback on the Sound Blaster device.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
-
-	align 4
 
 play:
 	push eax
@@ -586,67 +582,59 @@ play:
 	push esi
 	push edi
 	push ebp
-	push es
 
 	; Reset audio output
 
 	mov dh, [params(initial_pan)]
 	call mod_swt_reset_channels
 
-	mov byte [state(buffer_playprt)], 0
-	mov word [state(play_sam_int)], 0
-	mov word [state(play_sam_fr)], 0
-	mov byte [state(playing)], 1
+	mov byte [buffer_playprt], 0
+	mov dword [play_sam_int], 0
+	mov dword [play_sam_fr], 0
+	mov byte [playing], 1
 
 	; Pre-render into output buffer before starting playback
 
-	mov byte [state(buffer_pending)], BUF_READY
-	mov byte [state(buffer_status)], BUF_RENDER_1
+	mov byte [buffer_pending], BUF_READY
+	mov byte [buffer_status], BUF_RENDER_1
 	call render
-	mov byte [state(buffer_status)], BUF_RENDER_2
+	mov byte [buffer_status], BUF_RENDER_2
 	call render
-	mov byte [state(buffer_status)], BUF_RENDER_3
+	mov byte [buffer_status], BUF_RENDER_3
 	call render
-
-	cli
 
 	; Setup and install IRQ handler
 
-	mov cs:[irq_player_segment], ds
-	mov cl, [params(irq)]
-	call far sys_pic_irq_to_int
-	call far sys_get_int_handler
-	mov cs:[irq_prev_handler + 2], es
-	mov cs:[irq_prev_handler], bx
-	mov ax, cs
-	mov es, ax
-	mov bx, irq_handler
-	call far sys_set_int_handler
+	mov word [irq_player_segment], ds
+	mov al, [params(irq)]
+	call pmi(get_irq_hndlr)
+	mov [params(irq)], al		; Update with real IRQ
+	mov [irq_prev_handler], edx
+	mov [irq_prev_handler + 4], cx
+	mov cx, cs
+	mov edx, irq_handler
+	call pmi(set_irq_hndlr)
 
 	; Enable IRQ
 
-	xor ax, ax
-	mov es, ax			; ES: zeropage
-	movzx cx, byte [params(irq)]
-	call far sys_pic_enable_irq
-
-	sti
+	mov cl, [params(irq)]
+	call irq_enable
 
 	; Setup Sound Blaster for audio playback
 
 	mov dx, [params(port)]
-	mov bx, [params(buffer_size)]
-	test byte [state(output_format)], FMT_STEREO
+	mov ebx, [params(buffer_size)]
+	test byte [output_format], FMT_STEREO
 	setnz cl			; CL: 1 when stereo output, else 0
-	shl bx, cl			; Twice the count when stereo
-	dec bx
-	mov byte [state(sbpro_init)], 0
+	shl ebx, cl			; Twice the count when stereo
+	dec ebx
+	mov byte [sbpro_init], 0
 
-	cmp byte [state(dev_type)], MOD_SB_16
+	cmp byte [dev_type], MOD_SB_16
 	je .start_sb16
-	cmp byte [state(dev_type)], MOD_SB_PRO
+	cmp byte [dev_type], MOD_SB_PRO
 	je .start_sbpro
-	cmp byte [state(dev_type)], MOD_SB_2
+	cmp byte [dev_type], MOD_SB_2
 	je .start_sb2
 
 	; Initialize Sound Blaster playback
@@ -655,8 +643,7 @@ play:
 
 	write_dsp 0, 0xd1		; Turn on DAC speaker
 	write_dsp 0x0c, 0x40		; Set time constant
-	write_dsp 0x0c, [state(time_constant)]
-	dec bx
+	write_dsp 0x0c, [time_constant]
 	write_dsp 0x0c, 0x14		; Set buffer size and start 8-bit
 	write_dsp 0x0c, bl		; single-cycle DMA output
 	write_dsp 0x0c, bh
@@ -671,7 +658,7 @@ play:
 
 	write_dsp 0, 0xd1		; Turn on DAC speaker
 	write_dsp 0x0c, 0x40		; Set time constant
-	write_dsp 0x0c, [state(time_constant)]
+	write_dsp 0x0c, [time_constant]
 	write_dsp 0x0c, 0x48		; Set buffer size
 	write_dsp 0x0c, bl
 	write_dsp 0x0c, bh
@@ -685,7 +672,7 @@ play:
 
 	write_dsp 0, 0xd1		; Turn on DAC speaker
 
-	test byte [state(output_format)], FMT_STEREO
+	test byte [output_format], FMT_STEREO
 	jz .sbpro_mono
 	sub dl, 0x08			; DX: 2x4: mixer port
 	mov al, 0x0e
@@ -698,32 +685,30 @@ play:
 	; Send a single 1-sample silence to fix channel swapping bug on some
 	; SB Pro models (although this does cause channel swap on DOSBox).
 
-	push bx				; Preserve original buffer length
-	mov byte [state(sbpro_init)], 1
+	push ebx			; Preserve original buffer length
+	mov byte [sbpro_init], 1
 	mov dl, [params(dma)]
-	call far sys_dma_disable_channel
-	xor ebx, ebx
-	mov bx, cs
-	shl ebx, 4
-	add ebx, silence_sample
-	xor ecx, ecx
-	mov dh, SYS_DMA_READ | SYS_DMA_SINGLE
-	call far sys_dma_setup_channel
-	call far sys_dma_enable_channel
-	pop bx
+	call pmi(dma_stop)
+	mov ebx, [buffer_addr]
+	mov dword [ebx], 0x80808080
+	mov ebx, [dma_addr]
+	mov ecx, 1
+	mov dh, PMI_DMA_READ | PMI_DMA_SINGLE
+	call pmi(dma_start)
+	pop ebx
 
 	mov dx, [params(port)]
 	write_dsp 0, 0x14
 	write_dsp 0x0c, 0
 	write_dsp 0x0c, 0
-	mov ecx, es:[0x46c]		; Save timer tick count
+	mov ecx, [0x46c]		; Save timer tick count
 
 .wait_sbpro_init:
-	mov eax, es:[0x46c]		; Wait for up to 2 ticks (110 ms)
+	mov eax, [0x46c]		; Wait for up to 2 ticks (110 ms)
 	sub eax, ecx
 	cmp eax, 2
 	ja .sbpro_mono
-	cmp byte [state(sbpro_init)], 1
+	cmp byte [sbpro_init], 1
 	je .wait_sbpro_init
 
 .sbpro_mono:
@@ -734,14 +719,14 @@ play:
 	call .setup_autoinit_dma	; Setup DMA controller
 
 	write_dsp 0, 0x40		; Set time constant
-	write_dsp 0x0c, [state(time_constant)]
+	write_dsp 0x0c, [time_constant]
 
 	sub dl, 0x08			; DX: 2x4: mixer port
 	mov al, 0x0e
 	out dx, al
 	inc dx
 	in al, dx
-	mov [state(sbpro_filter)], al
+	mov [sbpro_filter], al
 	or al, 0x20
 	out dx, al			; Turn off output filter
 
@@ -753,14 +738,14 @@ play:
 	jmp .exit
 
 .start_sb16:
-	mov ecx, [state(sample_rate)]
+	mov ecx, [sample_rate]
 
 	; Initialize Sound Blaster 16 playback
 
 	call .setup_autoinit_dma	; Setup DMA controller
 
 	mov ah, 0x20
-	test byte [state(output_format)], FMT_STEREO
+	test byte [output_format], FMT_STEREO
 	jne .mono_sb16
 	xor ah, ah
 
@@ -775,7 +760,6 @@ play:
 
 .exit:
 	clc
-	pop es
 	pop ebp
 	pop edi
 	pop esi
@@ -783,24 +767,18 @@ play:
 	pop ecx
 	pop ebx
 	pop eax
-	retn
+	ret
 
 
-;------------------------------------------------------------------------------
 ; Setup DMA controller for auto-init audio data transfer.
-;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-;------------------------------------------------------------------------------
-
-	align 4
 
 .setup_autoinit_dma:
 	push ebx
 	push ecx
-	push dx
+	push edx
 
 	mov dl, [params(dma)]
-	cmp byte [state(dev_type)], MOD_SB_16
+	cmp byte [dev_type], MOD_SB_16
 	jne .setup_dma
 	mov dh, [params(dma) + 1]	; Use high DMA for 16-bit output if
 	test dh, dh			; specified
@@ -808,44 +786,50 @@ play:
 	mov dl, dh
 
 .setup_dma:
-	call far sys_dma_disable_channel
-	mov ebx, [state(buffer_addr)]
-	mov ecx, [state(buffer_size)]
-	lea ecx, [ecx + ecx * 2]
-	mov dh, SYS_DMA_READ | SYS_DMA_AUTO | SYS_DMA_SINGLE
-	call far sys_dma_setup_channel
-	call far sys_dma_enable_channel
+	call pmi(dma_stop)
+	mov ebx, [dma_addr]
+	mov ecx, [buffer_size]
+	lea ecx, [ecx + ecx * 2]	; Triple buffering
+	mov dh, PMI_DMA_READ | PMI_DMA_AUTO | PMI_DMA_SINGLE
+	call pmi(dma_start)
 
-	pop dx
+	pop edx
 	pop ecx
 	pop ebx
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Stop playback on the Sound Blaster device.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
 ; <- CF - Cleared
 ;------------------------------------------------------------------------------
 
-	align 4
-
 stop:
-	mov byte [state(playing)], 0
+	mov byte [playing], 0
 
 	push eax
-	push bx
-	push cx
-	push es
+	push ebx
+	push ecx
 
 	; Halt DMA operation, then terminate auto-initialize DMA
 
+	mov dl, [params(dma)]
+	cmp byte [dev_type], MOD_SB_16
+	jne .setup_dma
+	mov dh, [params(dma) + 1]	; Use high DMA for 16-bit output if
+	test dh, dh			; specified
+	jz .setup_dma
+	mov dl, dh
+
+.setup_dma:
+	call pmi(dma_stop)
+
 	mov dx, [params(port)]
 
-	cmp byte [state(dev_type)], MOD_SB_PRO
+	cmp byte [dev_type], MOD_SB_PRO
 	je .stop_sbpro
-	cmp byte [state(dev_type)], MOD_SB_16
+	cmp byte [dev_type], MOD_SB_16
 	je .stop_sb16
 
 	; Stop Sound Blaster 2.0 playback
@@ -865,7 +849,7 @@ stop:
 	mov al, 0x0e
 	out dx, al
 	inc dx
-	mov al, [state(sbpro_filter)]
+	mov al, [sbpro_filter]
 	out dx, al			; Restore filter
 	dec dx
 	mov al, 0x0e
@@ -887,24 +871,19 @@ stop:
 	write_dsp 0x0c, 0xd9
 
 .reset_irq:
-	cli
 
 	; Uninstall IRQ handler
 
-	mov cl, [params(irq)]
-	call far sys_pic_irq_to_int
-	mov es, cs:[irq_prev_handler + 2]
-	mov bx, cs:[irq_prev_handler]
-	call far sys_set_int_handler
-
-	sti
+	mov al, [params(irq)]
+	mov cx, [irq_prev_handler + 4]
+	mov edx, [irq_prev_handler]
+	call pmi(set_irq_hndlr)
 
 	clc
-	pop es
-	pop cx
-	pop bx
+	pop ecx
+	pop ebx
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -917,8 +896,7 @@ stop:
 ;         bit 2: Set speed to CX
 ;    BL - Volume (0 - 64)
 ;    BH - Panning (0 - 255)
-;    CX - Playback note periods
-;    DS - Player instance segment
+;    ECX - Playback note periods
 ;------------------------------------------------------------------------------
 
 	align 4
@@ -934,12 +912,12 @@ set_mixer:
 	push edx
 
 	push eax
-	test cx, cx			; Guard against division by zero hangs
+	xor eax, eax
+	test ecx, ecx			; Guard against division by zero hangs
 	setz al
-	xor ah, ah
-	add cx, ax
+	add ecx, eax
 	xor edx, edx
-	mov eax, [state(period_base)]
+	mov eax, [period_base]
 	and ecx, 0xffff
 	div ecx
 	shr ecx, 1			; ECX: period / 2
@@ -947,23 +925,22 @@ set_mixer:
 	setae dl
 	movzx edx, dl			; EDX: 1 when yes, 0 otherwise
 	add eax, edx
-	mov dx, ax
+	mov edx, eax
 	shr eax, 16
-	mov cx, ax
+	mov ecx, eax			; ECX.DX: playback speed
 	pop eax
 
 	call mod_swt_set_mixer
 
 	pop edx
 	pop ecx
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Set the playroutine callback tick rate.
 ;------------------------------------------------------------------------------
-; -> BX - Number of playroutine ticks per minute
-;    DS - Player instance segment
+; -> EBX - Number of playroutine ticks per minute
 ;------------------------------------------------------------------------------
 
 	align 4
@@ -975,7 +952,7 @@ set_tick_rate:
 
 	; Calculate number of samples between player ticks
 
-	mov eax, [state(sample_rate)]
+	mov eax, [sample_rate]
 	mov edx, eax
 	shl eax, 6
 	shl edx, 2
@@ -983,109 +960,117 @@ set_tick_rate:
 	mov edx, eax
 	shr edx, 16
 	shl eax, 16			; EDX:EAX: sample rate * 60 * 65536
-	and ebx, 0xffff
 	div ebx
 
 	mov ebx, eax
-	shr ebx, 16			; BX.AX: Number of samples between ticks
-	mov [state(play_tickr_int)], bx
-	mov [state(play_tickr_fr)], ax
+	shr ebx, 16
+	shl eax, 16			; EBX.EAX: samples between ticks
+	mov [play_tickr_int], ebx
+	mov [play_tickr_fr], eax
 
 	pop edx
 	pop ebx
 	pop eax
-	retn
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Render channels into the output buffer.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
 ; <- Destroys everything except segment registers
 ;------------------------------------------------------------------------------
 
 	align 4
 
 render:
+	%ifdef MOD_USE_PROFILER
+	call profiler_get_counter
+	push eax
+	%endif
 	mov al, BUF_RENDERING
-	xchg al, byte [state(buffer_status)]
+	xchg al, byte [buffer_status]
 	cmp al, BUF_RENDERING
-	je .exit			; BUF_RENDERING: already rendering audio
+	je .rendering			; BUF_RENDERING: already rendering audio
 	jb .noop			; BUF_READY: nothing to render
-	cmp byte [state(playing)], 1	; Not playing, don't render
+	cmp byte [playing], 1		; Not playing, don't render
 	jne .exit
 
 	; Initialize state
 
-	mov dx, [params(buffer_size)]	; DX: number of samples to render
-	mov bx, [state(play_sam_int)]	; BX: samples until playroutine tick
-	mov edi, [state(buffer_addr)]
+	push eax
+
+	mov edx, [params(buffer_size)]	; EDX: number of samples to render
+	mov ebx, [play_sam_int]		; EBX: samples until playroutine tick
+	mov edi, [buffer_addr]
 	cmp al, BUF_RENDER_1
 	je .loop_render
-	mov esi, [state(buffer_size)]	; 2nd part of buffer
+	mov esi, [buffer_size]		; 2nd part of buffer
 	add edi, esi
 	cmp al, BUF_RENDER_2
 	je .loop_render
 	add edi, esi			; 3rd part of buffer
 
 	; Render samples to the output audio buffer
-	; BX: number of samples until next playroutine tick
-	; CX: number of samples to render by software wavetable in current pass
-	; DX: number of samples to render into output audio buffer
+	; EBX: number of samples until next playroutine tick
+	; ECX: number of samples to render by software wavetable in current pass
+	; EDX: number of samples to render into output audio buffer
 	; EDI: linear address of output audio buffer position to render into
 
 .loop_render:
 
 	; Call playroutine tick when necessary
 
-	test bx, bx
+	test ebx, ebx
 	jnz .calc_render_count
 
-	push bx
-	push cx
-	push dx
+	push ebx
+	push ecx
+	push edx
 	push edi
 	call mod_playroutine_tick
 	pop edi
-	pop dx
-	pop cx
-	pop bx
+	pop edx
+	pop ecx
+	pop ebx
 
-	mov ax, [state(play_tickr_fr)]
-	add [state(play_sam_fr)], ax
-	adc bx, 0
-	add bx, [state(play_tickr_int)]
+	mov eax, [play_tickr_fr]
+	add [play_sam_fr], eax
+	adc ebx, 0
+	add ebx, [play_tickr_int]
 
 .calc_render_count:
 
 	; Determine number of samples to render in this pass
 
-	movzx ecx, dx			; CX: number of samples to render
-	cmp cx, bx			; Don't render past playroutine tick
+	mov ecx, edx			; ECX: number of samples to render
+	cmp ecx, ebx			; Don't render past playroutine tick
 	jb .render_swt
-	mov cx, bx
+	mov ecx, ebx
 
 .render_swt:
 
 	; Render channels using software wavetable
 
-	push bx
+	push ebx
 	push ecx
-	push dx
+	push edx
 	call mod_swt_render
-	pop dx
+	pop edx
 	pop ecx
-	pop bx
+	pop ebx
 
 	; Calculate number of samples left to render
 
-	sub bx, cx
-	sub dx, cx
+	sub ebx, ecx
+	sub edx, ecx
 	jnz .loop_render
+
+	pop eax
 
 	; Output buffer completely rendered
 
-	mov [state(play_sam_int)], bx	; Update samples until playroutine tick
+	mov [play_sam_int], ebx		; Update samples until playroutine tick
+	call update_buffer_position
 
 .noop:
 
@@ -1093,50 +1078,70 @@ render:
 	; data)
 
 	mov al, BUF_READY
-	xchg al, [state(buffer_pending)]
-	mov [state(buffer_status)], al
+	xchg al, [buffer_pending]
+	mov [buffer_status], al
 
 .exit:
-	retn
+	%ifdef MOD_USE_PROFILER
+	call profiler_get_counter
+	pop ebx
+	sub eax, ebx
+	add [mod_perf_ticks], eax
+	%endif
+	ret
+
+.rendering:
+	mov al, [buffer_pending]
+	cmp al, BUF_RENDER_1
+	jb .exit
+	call update_buffer_position
+	jmp .exit
 
 
 ;------------------------------------------------------------------------------
 ; Return information about output device.
 ;------------------------------------------------------------------------------
-; -> DS - Player instance segment
-; -> ES:EDI - Pointer to buffer receiving mod_channel_info structures
-; <- ES:EDI - Filled with data
+; -> ESI - Pointer to buffer receiving mod_output_info structures
+; <- ESI - Filled with data
 ;------------------------------------------------------------------------------
 
 get_info:
 	push eax
-	push cx
-	push dx
+	push ecx
+	push edx
 
 	; Buffer info
 
-	mov eax, [state(sample_rate)]
-	mov es:[edi + mod_output_info.sample_rate], eax
-	mov eax, [state(buffer_addr)]
-	mov es:[edi + mod_output_info.buffer_addr], eax
-	mov eax, [state(buffer_size)]
-	lea eax, [eax + eax * 2]
-	mov es:[edi + mod_output_info.buffer_size], eax
-	mov cl, [state(buffer_playprt)]
-	xor eax, eax
-	cmp cl, 1
-	jb .format			; EAX: 0 (first buffer)
-	mov eax, [state(buffer_size)]
-	je .format			; EAX: 1 * buffer_size (second buffer)
+	mov eax, [sample_rate]
+	mov [esi + mod_output_info.sample_rate], eax
+	mov eax, [buffer_addr]
+	mov [esi + mod_output_info.buffer_addr], eax
+	mov eax, [buffer_size]
+	mov edx, eax			; EDX: buffer size
+	lea eax, [eax + eax * 2]	; Triple buffering
+	mov [esi + mod_output_info.buffer_size], eax
+	xor eax, eax			; EAX: current buffer start position
+	cmp byte [buffer_playprt], 1
+	jb .add_partial			; EAX: 0 (first buffer)
+	mov eax, edx
+	je .add_partial			; EAX: 1 * buffer_size (second buffer)
 	add eax, eax			; EAX: 2 * buffer_size (third buffer)
 
-.format:
-	mov es:[edi + mod_output_info.buffer_pos], eax
+.add_partial:
+	mov ecx, [systimer_ticks]	; Add progress since buffer flip
+	mov edx, [sample_rate]
+	sub ecx, [buffer_systicks]	; ECX: systimer ticks since buffer flip
+	imul edx, ecx
+	shr edx, 10			; EDX: samples since buffer flip
+	mov cl, [shl_per_sample]	; Adjust for channel/bitdepth
+	shl edx, cl
+	add eax, edx			; Add to buffer start position
+	mov [esi + mod_output_info.buffer_pos], eax
 
 	; Calculate buffer format
 
-	mov dl, [state(output_format)]
-	xor cx, cx			; CH: buffer format
+	mov dl, [output_format]
+	xor ecx, ecx			; CH: buffer format
 	mov dh, dl
 	and dl, FMT_BITDEPTH
 	cmp dl, FMT_16BIT
@@ -1157,18 +1162,70 @@ get_info:
 	or ch, MOD_BUF_UINT
 
 .done:
-	mov es:[edi + mod_output_info.buffer_format], ch
+	mov [esi + mod_output_info.buffer_format], ch
 
-	pop dx
-	pop cx
+	pop edx
+	pop ecx
 	pop eax
-	retn
+	ret
+
+
+;------------------------------------------------------------------------------
+; Return current MOD playback position.
+;------------------------------------------------------------------------------
+; -> ESI - Pointer to buffer receiving mod_position_info structures
+; <- ESI - Filled with data
+;------------------------------------------------------------------------------
+
+get_position:
+	push ecx
+	push esi
+	push edi
+
+	mov edi, esi
+	xor esi, esi
+	cmp byte [buffer_playprt], 1
+	jb .done
+	mov esi, mod_position_info.strucsize
+	je .done
+	add esi, esi
+
+.done:
+	add esi, position_info
+	mov ecx, (mod_position_info.strucsize) / 4
+	rep movsd
+
+	pop edi
+	pop esi
+	pop ecx
+	ret
+
+
+;------------------------------------------------------------------------------
+; Update song position information for a specific buffer part.
+;------------------------------------------------------------------------------
+; -> AL - Buffer part number (BUF_RENDER_n)
+;------------------------------------------------------------------------------
+
+update_buffer_position:
+	push esi
+	xor esi, esi			; Save playback position for this buffer
+	cmp al, BUF_RENDER_2
+	jb .get_position
+	mov esi, mod_position_info.strucsize
+	je .get_position
+	add esi, esi
+
+.get_position:
+	add esi, position_info
+	call mod_playroutine_get_position_info
+	pop esi
+	ret
 
 
 ;==============================================================================
 ; Sound Blaster playback functions.
 ;==============================================================================
-
 
 ;------------------------------------------------------------------------------
 ; Reset the Sound Blaster DSP.
@@ -1178,11 +1235,9 @@ get_info:
 ;    EAX - Error code if CF set
 ;------------------------------------------------------------------------------
 
-	align 4
-
 reset_dsp:
-	push cx
-	push dx
+	push ecx
+	push edx
 	push eax
 
 	; Reset Sound Blaster DSP
@@ -1197,14 +1252,14 @@ reset_dsp:
 	; Wait for reset response code
 
 	add dl, 8			; DX: 2xE, DSP read-buffer status port
-	mov cx, 10			; DSP data available timeout, ~550 ms
+	mov ecx, 10			; DSP data available timeout, ~550 ms
 
 .check_reset_done_loop:
 	in al, dx			; Check if reset response is available
 	test al, 0x80
 	jnz .check_dsp
 	call wait_55ms
-	dec cx
+	dec ecx
 	jnz .check_reset_done_loop
 
 .check_dsp:
@@ -1217,12 +1272,12 @@ reset_dsp:
 	clc
 
 .exit:
-	pop dx
-	pop cx
-	retn
+	pop edx
+	pop ecx
+	ret
 
 .error:
-	add sp, 4			; Discard EAX from stack
+	add esp, 4			; Discard EAX from stack
 	mov eax, MOD_ERR_DEVICE
 	stc
 	jmp .exit
@@ -1232,63 +1287,52 @@ reset_dsp:
 ; Wait (at least) 55 milliseconds.
 ;------------------------------------------------------------------------------
 
-	align 4
-
 wait_55ms:
-	push ax
-	push es
+	push eax
 
-	xor ax, ax
-	mov es, ax
-	mov ax, es:[0x46c]
+	mov eax, [0x46c]
 
-.wait_tick:
-	cmp ax, es:[0x46c]
-	je .wait_tick
+.wait_timer_tick:
+	cmp eax, [0x46c]
+	je .wait_timer_tick
 
-	pop es
-	pop ax
-	retn
+	pop eax
+	ret
 
 
 ;------------------------------------------------------------------------------
 ; Sound Blaster IRQ handler.
 ;------------------------------------------------------------------------------
 
-	align 4
+	align 16
 
 irq_handler:
 	push eax
 	push ecx
 	push edx
 	push ds
+	push es
 
-	; DS: player instance segment
+	; Setup DS and ES for rendering and playroutine
 
 	mov ax, 0x1234
 	irq_player_segment EQU $ - 2
 	mov ds, ax
-
-	; Distinguish between hardware IRQ and others (exceptions, software
-	; interrupts): call old handler if not a hardware IRQ
-	; sys_pic_irq_serviced destroys AL, CL and DX!
-
-	sys_pic_irq_serviced [params(irq)]
-	jz .prev_handler
+	mov es, ax
 
 	mov dx, [params(port)]
-	cmp byte [state(dev_type)], MOD_SB_16
+	cmp byte [dev_type], MOD_SB_16
 	je .ack_sb16
-	cmp byte [state(dev_type)], MOD_SB_1
+	cmp byte [dev_type], MOD_SB_1
 	jne .ack_sb2
-	cmp byte [state(playing)], 1	; Pre-SB 2.0, but playback stopped,
+	cmp byte [playing], 1		; Pre-SB 2.0, but playback stopped,
 	jne .ack_sb2			; don't restart, just ACK IRQ
 
 	; Start transfer of next block on Sound Blaster pre-2.0 and acknowledge
 	; IRQ
 
-	mov cx, [params(buffer_size)]
-	dec cx
+	mov ecx, [params(buffer_size)]
+	dec ecx
 	write_dsp 0x0, 0x14		; Set buffer size and restart 8-bit
 	write_dsp 0x0c, cl		; single-cycle DMA output
 	write_dsp 0x0c, ch
@@ -1315,7 +1359,7 @@ irq_handler:
 	add dl, 0x04			; Check the source of the IRQ
 	mov al, 0x82
 	out dx, al
-	inc dx
+	inc dl
 	in al, dx
 	test al, 0x02
 	jz .prev_handler		; Not 16-bit IRQ, jump to old handler
@@ -1323,25 +1367,25 @@ irq_handler:
 	in al, dx
 
 .ack_pic_irq:
-	sys_pic_eoi byte [params(irq)]	; Destroys AL
+	irq_pic_eoi byte [params(irq)]	; Destroys AL
 
-	cmp byte [state(sbpro_init)], 1
+	cmp byte [sbpro_init], 1
 	je .ack_sbpro_init_irq
 
 	; End of buffer reached, play next part of the triple buffer
 
-	mov ah, [state(buffer_playprt)]
+	mov ah, [buffer_playprt]
 	inc ah
 	cmp ah, 2
 	ja .reset_buffer		; Re-init to first part
-	mov [state(buffer_playprt)], ah	; Continue to 2nd/3rd part
+	mov [buffer_playprt], ah	; Continue to 2nd/3rd part
 	add ah, BUF_RENDER_1 - 1	; Target render buffer: playing part - 1
 	jmp .render_buffer
 
 	align 4
 
 .ack_sbpro_init_irq:
-	mov byte [state(sbpro_init)], 0
+	mov byte [sbpro_init], 0
 	jmp .exit
 
 	align 4
@@ -1350,16 +1394,18 @@ irq_handler:
 
 	; Wrap back to first part of the buffer
 
-	mov byte [state(buffer_playprt)], 0
+	mov byte [buffer_playprt], 0
 	mov ah, BUF_RENDER_3		; Target render buffer: 3rd part
 
 .render_buffer:
-	cmp byte [state(buffer_status)], BUF_RENDERING
+	mov edx, [systimer_ticks]
+	mov [buffer_systicks], edx
+	cmp byte [buffer_status], BUF_RENDERING
 	je .render_pending
 
 	; Render into update pending buffer part
 
-	push ax
+	push eax
 	push ebx
 	push esi
 	push edi
@@ -1371,15 +1417,16 @@ irq_handler:
 	pop edi
 	pop esi
 	pop ebx
-	pop ax
+	pop eax
 
 	; Update pending buffer part unless a render was already in progress
 
-	cmp byte [state(buffer_status)], BUF_READY
+	cmp byte [buffer_status], BUF_READY
 	jne .exit
-	mov byte [state(buffer_status)], ah
+	mov byte [buffer_status], ah
 
 .exit:
+	pop es
 	pop ds
 	pop edx
 	pop ecx
@@ -1389,55 +1436,86 @@ irq_handler:
 	align 4
 
 .render_pending:
-	mov byte [state(buffer_pending)], ah
+	mov byte [buffer_pending], ah
+	mov al, ah
+	call update_buffer_position
 
 	align 4				; Already aligned, but just in case...
 
 .prev_handler:
+	pop es
 	pop ds
 	pop edx
 	pop ecx
 	pop eax
-	jmp 0x1234:0x1234
-	irq_prev_handler EQU $ - 4
+	jmp 0x1234:0x12345678
+	irq_prev_handler EQU $ - 6
 
 
 ;==============================================================================
 ; Data area
 ;==============================================================================
 
-		; Output device function pointers
+section .data
 
-		alignb 4
+		; Output device API jump table
 
-global mod_out_sb_fns
-mod_out_sb_fns	istruc mod_out_fns
-		set_out_fn(setup, setup)
-		set_out_fn(shutdown, shutdown)
-		set_out_fn(upload_sample, mod_swt_upload_sample)
-		set_out_fn(free_sample, mod_swt_free_sample)
-		set_out_fn(set_amplify, set_amplify)
-		set_out_fn(set_interpol, mod_swt_set_interpolation)
-		set_out_fn(set_stereomode, mod_swt_set_stereo_mode)
-		set_out_fn(play, play)
-		set_out_fn(stop, stop)
-		set_out_fn(set_tick_rate, set_tick_rate)
-		set_out_fn(set_mixer, set_mixer)
-		set_out_fn(set_sample, mod_swt_set_sample)
-		set_out_fn(render, render)
-		set_out_fn(get_mixer_info, mod_swt_get_mixer_info)
-		set_out_fn(get_info, get_info)
+global mod_dev_sb_api
+mod_dev_sb_api	istruc mod_dev_api
+		set_api_fn(setup, setup)
+		set_api_fn(shutdown, shutdown)
+		set_api_fn(upload_sample, mod_swt_upload_sample)
+		set_api_fn(free_sample, mod_swt_free_sample)
+		set_api_fn(set_channels, mod_swt_set_channels)
+		set_api_fn(set_amplify, set_amplify)
+		set_api_fn(set_interpol, mod_swt_set_interpolation)
+		set_api_fn(set_stereomode, mod_swt_set_stereo_mode)
+		set_api_fn(play, play)
+		set_api_fn(stop, stop)
+		set_api_fn(set_tick_rate, set_tick_rate)
+		set_api_fn(set_mixer, set_mixer)
+		set_api_fn(set_sample, mod_swt_set_sample)
+		set_api_fn(render, render)
+		set_api_fn(get_mixer_info, mod_swt_get_mixer_info)
+		set_api_fn(get_info, get_info)
+		set_api_fn(get_position, get_position)
+		set_api_fn(reset_channels, mod_swt_reset_channels)
 		iend
 
-silence_sample	db 0x80
-blaster_env	db 'BLASTER', 0
+blaster_env	db 'BLASTER', 0		; Environment var. name for detection
 
-		%ifdef __DEBUG__
-
+		%if (LOG_LEVEL >= LOG_INFO)
 type_sb1	db '', 0
 type_sb2	db ' 2.0', 0
 type_sbpro	db ' Pro', 0
 type_sb16	db ' 16', 0
-types		dw type_sb1, type_sb2, type_sbpro, type_sb16
-
+types		dd type_sb1, type_sb2, type_sbpro, type_sb16
 		%endif
+
+section .bss
+
+position_info	resb mod_position_info.strucsize * 3
+params		resd (mod_dev_params.strucsize + 3) / 4
+period_base	resd 1			; Period to speed conversion base
+sample_rate	resd 1			; Actual playback sample rate
+buffer_addr	resd 1			; Linear address of output buffer
+dma_addr	resd 1			; Physical address of output buffer
+buffer_size	resd 1			; Size of the output buffer
+buffer_systicks	resd 1			; Systimer tick at buffer flip
+
+play_tickr_int	resd 1			; Number of samples between player ticks
+play_tickr_fr	resd 1			; Fraction part of the above
+play_sam_int	resd 1			; Number of samples until next tick
+play_sam_fr	resd 1			; Fraction part of the above
+amplify		resw 1			; Output amplification
+
+buffer_playprt	resb 1			; Which of the double buffers is playing
+buffer_status	resb 1			; Flag to indicate need for rendering
+buffer_pending	resb 1			; Pending render into buffer
+dev_type	resb 1			; Output Sound Blaster card type
+output_format	resb 1			; Output bitstream format
+time_constant	resb 1			; Time constant value
+sbpro_filter	resb 1			; Output filter state for SB Pro
+sbpro_init	resb 1			; Flag for SB Pro stereo fix init stage
+playing		resb 1			; Flag for playback ongoing
+shl_per_sample	resb 1			; Bytes per sample
