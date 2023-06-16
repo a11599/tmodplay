@@ -293,7 +293,7 @@ mod_dev_none_api istruc mod_dev_api
 		set_api_fn(set_mixer, noop)
 		set_api_fn(set_sample, noop)
 		set_api_fn(render, noop)
-		set_api_fn(get_mixer_info, noop)
+		set_api_fn(get_chn_info, mod_playroutine_get_channel_info)
 		set_api_fn(get_info, noop)
 		set_api_fn(get_position, mod_playroutine_get_position_info)
 		set_api_fn(reset_channels, noop)

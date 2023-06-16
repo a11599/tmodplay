@@ -53,6 +53,7 @@ SEC_TEXT_COL	EQU 0x07		; Secondary text color
 PB_BG_COL	EQU 0x08		; Progress bar background color
 PB_FG_COL	EQU 0x09		; Progress bar progress color
 INFO_TEXT_COL	EQU 0x0a		; Scope info text color
+RMS_BAR_COL	EQU 0x0b		; RMS meter bar color
 
 ; UI flags
 
@@ -1148,13 +1149,15 @@ ui_run:
 	mov esi, position_info
 	call mod_get_position_info
 
-	; Draw scopes to the screen (do early to avoid tearing)
+	; Draw scopes and RMS bars to the screen (do early to avoid tearing)
 
 	call draw_scopes
+	call draw_rms_sample
 
-	; Render scopes to scope bitmap memory
+	; Render scopes to scope bitmap memory and calculate RMS sample values
 
-	call render_scopes
+	call update_scopes
+	call update_rms
 
 	; Render audio into output device buffer
 
@@ -1504,6 +1507,153 @@ draw_progress_bar:
 .stopped:
 	mov ecx, [gui_scr_width]	; Stopped: fill entire progress bar
 	jmp .render_pb
+
+
+;------------------------------------------------------------------------------
+; Updates RMS values for each instrument. This code relies on the fact that
+; the software wavetable unrolls samples. Make sure the unroll happens for at
+; least 256 samples!
+;------------------------------------------------------------------------------
+; <- Destroys everything except segment registers.
+;------------------------------------------------------------------------------
+
+update_rms:
+	mov ecx, 31			; Reset RMS values for each sample
+	mov edi, sample_rms
+	xor eax, eax
+	rep stosd
+
+	; Setup registers for RMS calculation
+	; BL: sample number
+	; BH: RMS sample counter
+	; CL: number of channels counter
+	; CH: volume
+	; EDX: pointer to mod_info structure
+	; ESI: pointer to mod_channel_info structure
+	; EDI: pointer to current sample position
+	; EBP: RMS counter
+
+	mov edx, [mod_info_addr]
+	mov cl, [edx + mod_info.num_channels]
+	mov esi, [chn_info_addr]
+
+.channel_rms_loop:
+	xor eax, eax
+	mov edi, [esi + mod_channel_info.sample_pos_int]
+	mov ch, [esi + mod_channel_info.volume]
+	mov al, mod_sample_info.strucsize
+	mov bl, [esi + mod_channel_info.sample]
+	test bl, bl
+	jz .skip_channel_rms		; No sample, skip RMS calculation
+	dec bl
+	mul bl
+	mov ebp, [edx + mod_info.samples + eax + mod_sample_info.addr]
+	cmp dword [edx + mod_info.samples + eax + mod_sample_info.rpt_len], 0
+	jne .calc_rms
+	cmp edi, [edx + mod_info.samples + eax + mod_sample_info.length]
+	jb .calc_rms
+	xor ebp, ebp
+	jmp .next_channel_rms
+
+	; Calculate RMS for the next 256 samples
+
+.calc_rms:
+	add edi, ebp
+	xor ebp, ebp
+	mov bh, 256
+
+.calc_rms_loop:
+	xor eax, eax
+	mov al, byte [edi]		; AL: signed sample value
+	mov ax, [rms_sqtab + eax * 2]	; EAX: signed sample value ^ 2
+	add ebp, eax			; EBP: accumulate squared values
+	inc edi				; Next sample
+	dec bh
+	jnz .calc_rms_loop
+
+	xor eax, eax
+	sar ebp, 8 + 6			; EBP: average squared value (0 - 255)
+	adc ebp, 0			; Rounding
+	mov al, [rms_sqrttab + ebp]	; AL: average squared root (0 - 64)
+	movzx ebp, ch			; EBP: volume (0 - 64)
+	imul ebp, eax			; EBP: RMS * volume
+	sar ebp, 6			; EBP: volume corrected linear RMS
+	adc ebp, 0			; Rounding
+
+.next_channel_rms:
+	movzx ebx, bl			; EBX: sample number (0 - 31)
+	add [sample_rms + ebx * 4], ebp	; Add channel RMS to sample
+
+.skip_channel_rms:
+	add esi, mod_channel_info.strucsize
+	dec cl
+	jnz .channel_rms_loop
+
+	ret
+
+
+;------------------------------------------------------------------------------
+; Displays RMS bars on the UI for each instrument.
+;------------------------------------------------------------------------------
+; <- Destroys everything except segment registers.
+;------------------------------------------------------------------------------
+
+draw_rms_sample:
+	mov dh, 31			; DH: sample counter
+	mov ebx, 4			; EBX: bar height
+	mov edi, 480 - 16 * 16 + 12	; EDI: bar top Y position
+	xor ebp, ebp			; EBP: sample RMS value pointer
+
+.bar_loop:
+	mov eax, [prev_sample_rms + ebp]
+	mov ecx, [sample_rms + ebp]
+	cmp ecx, 255			; Limit linear RMS to 255
+	jbe .bar_diff
+	mov ecx, 255
+
+.bar_diff:
+	mov cl, [rms_logtab + ecx]	; Convert to logarithmic scale
+	cmp ecx, eax
+	je .next_bar			; Same RMS, done
+	jae .use_rms			; Higher RMS, apply instantly
+	mov esi, eax			; Decay by as much as half of the
+	shr esi, 1			; old value to reduce flicker and give
+	cmp esi, ecx			; a visually more pleasant appearance
+	jb .use_rms
+	mov ecx, esi
+
+.use_rms:
+	mov [prev_sample_rms + ebp], ecx
+	mov esi, eax			; ESI: old RMS value
+	mov dl, RMS_BAR_COL
+	sub ecx, eax			; ECX: RMS change
+	jns .draw_bar
+	mov dl, 0			; Wrapback: use background color
+
+.draw_bar:
+	cmp dh, 15			; Set horizontal position in ESI
+	ja .first_column
+	add esi, 320 + (SCOPE_PADDING * 8) + (256 - 22 * 7) / 2
+	jmp .render_bar
+
+.first_column:
+	add esi, 320 - (SCOPE_WIDTH * 64 + SCOPE_PADDING * 8) + (256 - 22 * 7) / 2
+
+.render_bar:
+	call gui_draw_box		; Render RMS bar
+
+.next_bar:
+	cmp dh, 16			; Reset Y coordinate at start of 2nd col
+	jne .no_column_wrap
+	mov edi, 480 - 16 * 16 + 12 - 16
+
+.no_column_wrap:
+	add edi, 16			; Next row
+	add ebp, 4			; Next sample
+	dec dh
+	jnz .bar_loop
+
+	ret
 
 
 ;------------------------------------------------------------------------------
@@ -1989,7 +2139,7 @@ draw_scopes:
 
 
 ;------------------------------------------------------------------------------
-; Render output device buffer scopes to interleaved bitmap buffer.
+; Update output device buffer scopes in the interleaved bitmap buffer.
 ;------------------------------------------------------------------------------
 ; -> DS - Application data segment
 ;    %1 - Buffer bitdepth (MOD_BUF_DEPTH constants)
@@ -1998,7 +2148,7 @@ draw_scopes:
 ; <- Destroys everything except segment registers
 ;------------------------------------------------------------------------------
 
-%macro	render_scopes_for 3
+%macro	update_scopes_for 3
 
 	; Size of sample in bytes
 
@@ -2527,13 +2677,13 @@ draw_scopes:
 
 
 ;------------------------------------------------------------------------------
-; Render output devices scopes to interleaved bitmap buffer.
+; Update output devices scopes in the interleaved bitmap buffer.
 ;------------------------------------------------------------------------------
 ; -> DS - Application data segment
 ; <- Destroys everything except segment registers
 ;------------------------------------------------------------------------------
 
-render_scopes:
+update_scopes:
 	mov ah, [output_info + mod_output_info.buffer_format]
 	mov esi, renderfntab		; ESI: render function jump table
 	mov al, RENDERFNTAB_SIZE	; AL: entries in jump table
@@ -2552,23 +2702,23 @@ render_scopes:
 .renderfn:
 	jmp [esi + 4]
 
-render_scopes_8_m_u:
-	render_scopes_for MOD_BUF_8BIT, MOD_BUF_1CHN, MOD_BUF_UINT
+update_scopes_8_m_u:
+	update_scopes_for MOD_BUF_8BIT, MOD_BUF_1CHN, MOD_BUF_UINT
 
-render_scopes_8_s_u:
-	render_scopes_for MOD_BUF_8BIT, MOD_BUF_2CHN, MOD_BUF_UINT
+update_scopes_8_s_u:
+	update_scopes_for MOD_BUF_8BIT, MOD_BUF_2CHN, MOD_BUF_UINT
 
-render_scopes_16_m_u:
-	render_scopes_for MOD_BUF_16BIT, MOD_BUF_1CHN, MOD_BUF_UINT
+update_scopes_16_m_u:
+	update_scopes_for MOD_BUF_16BIT, MOD_BUF_1CHN, MOD_BUF_UINT
 
-render_scopes_16_s_u:
-	render_scopes_for MOD_BUF_16BIT, MOD_BUF_2CHN, MOD_BUF_UINT
+update_scopes_16_s_u:
+	update_scopes_for MOD_BUF_16BIT, MOD_BUF_2CHN, MOD_BUF_UINT
 
-render_scopes_32_m_s:
-	render_scopes_for MOD_BUF_1632BIT, MOD_BUF_2CHNL, MOD_BUF_INT
+update_scopes_32_m_s:
+	update_scopes_for MOD_BUF_1632BIT, MOD_BUF_2CHNL, MOD_BUF_INT
 
-render_scopes_32_s_s:
-	render_scopes_for MOD_BUF_1632BIT, MOD_BUF_2CHN, MOD_BUF_INT
+update_scopes_32_s_s:
+	update_scopes_for MOD_BUF_1632BIT, MOD_BUF_2CHN, MOD_BUF_INT
 
 
 ;==============================================================================
@@ -2790,20 +2940,21 @@ outtab		dd MOD_OUT_DAC * 256 + MOD_DAC_SPEAKER, out_speaker
 		dd MOD_OUT_SB * 256 + MOD_SB_16, out_sb16
 		dd 0, out_unknown
 
-		; Scope render functions for possible output buffer combinations
+		; Scope update functions for possible output buffer combinations
 
 		alignb 4
-renderfntab	dd MOD_BUF_8BIT | MOD_BUF_1CHN | MOD_BUF_UINT, render_scopes_8_m_u
-		dd MOD_BUF_8BIT | MOD_BUF_2CHN | MOD_BUF_UINT, render_scopes_8_s_u
-		dd MOD_BUF_16BIT | MOD_BUF_1CHN | MOD_BUF_UINT, render_scopes_16_m_u
-		dd MOD_BUF_16BIT | MOD_BUF_2CHN | MOD_BUF_UINT, render_scopes_16_s_u
-		dd MOD_BUF_1632BIT | MOD_BUF_2CHNL | MOD_BUF_INT, render_scopes_32_m_s
-		dd MOD_BUF_1632BIT | MOD_BUF_2CHN | MOD_BUF_INT, render_scopes_32_s_s
+renderfntab	dd MOD_BUF_8BIT | MOD_BUF_1CHN | MOD_BUF_UINT, update_scopes_8_m_u
+		dd MOD_BUF_8BIT | MOD_BUF_2CHN | MOD_BUF_UINT, update_scopes_8_s_u
+		dd MOD_BUF_16BIT | MOD_BUF_1CHN | MOD_BUF_UINT, update_scopes_16_m_u
+		dd MOD_BUF_16BIT | MOD_BUF_2CHN | MOD_BUF_UINT, update_scopes_16_s_u
+		dd MOD_BUF_1632BIT | MOD_BUF_2CHNL | MOD_BUF_INT, update_scopes_32_m_s
+		dd MOD_BUF_1632BIT | MOD_BUF_2CHN | MOD_BUF_INT, update_scopes_32_s_s
 		RENDERFNTAB_SIZE EQU ($ - renderfntab) / 8
 
 		; Output device parameters
 
 		alignb 4
+prev_sample_rms	dd 31 dup (0)		; Previous RMS values for each sample
 dev_params	db mod_dev_params.strucsize dup (0)
 
 file_name	dd 0			; Pointer to MOD file name
@@ -2820,6 +2971,8 @@ scope_blit_ilv	db 0			; Current scope blit interleave number
 %include "fonts/sgk075.inc"
 %include "fonts/digits.inc"
 
+		; VGA palette
+
 vga_palette	db  0,  0,  0		; 00: background (black)
 		db  7, 15,  9		; 01: scope lines
 		db  5, 11,  6		; 02: scope upper/lower limit lines
@@ -2831,7 +2984,113 @@ vga_palette	db  0,  0,  0		; 00: background (black)
 		db  2, 16, 22		; 08: progress bar background color
 		db  3, 36, 51		; 09: progress bar progress color
 		db 41, 39, 16		; 0A: info text color above scope
+		db  7, 31, 11		; 0B: RMS meter bar color
 		VGA_PALETTE_ENTRIES EQU ($ - vga_palette) / 3
+
+		; RMS square table
+
+rms_sqtab	dw 0, 4, 8, 9, 16, 25, 36, 49
+		dw 64, 81, 100, 121, 144, 169, 196, 225
+		dw 256, 289, 324, 361, 400, 441, 484, 529
+		dw 576, 625, 676, 729, 784, 841, 900, 961
+		dw 1024, 1089, 1156, 1225, 1296, 1369, 1444, 1521
+		dw 1600, 1681, 1764, 1849, 1936, 2025, 2116, 2209
+		dw 2304, 2401, 2500, 2601, 2704, 2809, 2916, 3025
+		dw 3136, 3249, 3364, 3481, 3600, 3721, 3844, 3969
+		dw 4096, 4225, 4356, 4489, 4624, 4761, 4900, 5041
+		dw 5184, 5329, 5476, 5625, 5776, 5929, 6084, 6241
+		dw 6400, 6561, 6724, 6889, 7056, 7225, 7396, 7569
+		dw 7744, 7921, 8100, 8280, 8463, 8648, 8835, 9024
+		dw 9215, 9408, 9603, 9800, 9999, 10200, 10403, 10608
+		dw 10815, 11024, 11235, 11448, 11663, 11880, 12099, 12320
+		dw 12543, 12768, 12995, 13224, 13455, 13688, 13923, 14160
+		dw 14399, 14640, 14883, 15128, 15375, 15624, 15875, 16128
+		dw 16383, 16128, 15875, 15624, 15375, 15128, 14883, 14640
+		dw 14399, 14160, 13923, 13688, 13455, 13224, 12995, 12768
+		dw 12543, 12320, 12099, 11880, 11663, 11448, 11235, 11024
+		dw 10815, 10608, 10403, 10200, 9999, 9800, 9603, 9408
+		dw 9215, 9024, 8835, 8648, 8463, 8280, 8100, 7921
+		dw 7744, 7569, 7396, 7225, 7056, 6889, 6724, 6561
+		dw 6400, 6241, 6084, 5929, 5776, 5625, 5476, 5329
+		dw 5184, 5041, 4900, 4761, 4624, 4489, 4356, 4225
+		dw 4096, 3969, 3844, 3721, 3600, 3481, 3364, 3249
+		dw 3136, 3025, 2916, 2809, 2704, 2601, 2500, 2401
+		dw 2304, 2209, 2116, 2025, 1936, 1849, 1764, 1681
+		dw 1600, 1521, 1444, 1369, 1296, 1225, 1156, 1089
+		dw 1024, 961, 900, 841, 784, 729, 676, 625
+		dw 576, 529, 484, 441, 400, 361, 324, 289
+		dw 256, 225, 196, 169, 144, 121, 100, 81
+		dw 64, 49, 36, 25, 16, 9, 4, 1
+
+		; RMS square root table
+
+rms_sqrttab	db 0, 4, 6, 7, 8, 9, 10, 11
+		db 11, 12, 13, 13, 14, 14, 15, 16
+		db 16, 17, 17, 17, 18, 18, 19, 19
+		db 20, 20, 20, 21, 21, 22, 22, 22
+		db 23, 23, 23, 24, 24, 24, 25, 25
+		db 25, 26, 26, 26, 27, 27, 27, 27
+		db 28, 28, 28, 29, 29, 29, 29, 30
+		db 30, 30, 31, 31, 31, 31, 32, 32
+		db 32, 32, 33, 33, 33, 33, 34, 34
+		db 34, 34, 34, 35, 35, 35, 35, 36
+		db 36, 36, 36, 37, 37, 37, 37, 37
+		db 38, 38, 38, 38, 38, 39, 39, 39
+		db 39, 39, 40, 40, 40, 40, 40, 41
+		db 41, 41, 41, 41, 42, 42, 42, 42
+		db 42, 43, 43, 43, 43, 43, 44, 44
+		db 44, 44, 44, 44, 45, 45, 45, 45
+		db 45, 46, 46, 46, 46, 46, 46, 47
+		db 47, 47, 47, 47, 47, 48, 48, 48
+		db 48, 48, 48, 49, 49, 49, 49, 49
+		db 49, 50, 50, 50, 50, 50, 50, 51
+		db 51, 51, 51, 51, 51, 51, 52, 52
+		db 52, 52, 52, 52, 53, 53, 53, 53
+		db 53, 53, 53, 54, 54, 54, 54, 54
+		db 54, 55, 55, 55, 55, 55, 55, 55
+		db 56, 56, 56, 56, 56, 56, 56, 57
+		db 57, 57, 57, 57, 57, 57, 58, 58
+		db 58, 58, 58, 58, 58, 58, 59, 59
+		db 59, 59, 59, 59, 59, 60, 60, 60
+		db 60, 60, 60, 60, 61, 61, 61, 61
+		db 61, 61, 61, 61, 62, 62, 62, 62
+		db 62, 62, 62, 62, 63, 63, 63, 63
+		db 63, 63, 63, 63, 64, 64, 64, 64
+
+		; RMS linear -> log conversion table, linear at very low values
+
+rms_logtab	db 0, 1, 2, 3, 4, 5, 7, 13
+		db 18, 23, 27, 31, 34, 37, 40, 43
+		db 45, 48, 50, 52, 54, 56, 58, 60
+		db 61, 63, 64, 66, 67, 69, 70, 71
+		db 73, 74, 75, 76, 77, 78, 79, 80
+		db 81, 82, 83, 84, 85, 86, 87, 88
+		db 88, 89, 90, 91, 92, 92, 93, 94
+		db 94, 95, 96, 96, 97, 98, 98, 99
+		db 100, 100, 101, 101, 102, 103, 103, 104
+		db 104, 105, 105, 106, 106, 107, 107, 108
+		db 108, 109, 109, 110, 110, 111, 111, 112
+		db 112, 113, 113, 113, 114, 114, 115, 115
+		db 116, 116, 116, 117, 117, 118, 118, 118
+		db 119, 119, 119, 120, 120, 120, 121, 121
+		db 122, 122, 122, 123, 123, 123, 124, 124
+		db 124, 125, 125, 125, 126, 126, 126, 126
+		db 127, 127, 127, 128, 128, 128, 129, 129
+		db 129, 129, 130, 130, 130, 131, 131, 131
+		db 131, 132, 132, 132, 132, 133, 133, 133
+		db 133, 134, 134, 134, 135, 135, 135, 135
+		db 135, 136, 136, 136, 136, 137, 137, 137
+		db 137, 138, 138, 138, 138, 139, 139, 139
+		db 139, 139, 140, 140, 140, 140, 141, 141
+		db 141, 141, 141, 142, 142, 142, 142, 142
+		db 143, 143, 143, 143, 143, 144, 144, 144
+		db 144, 144, 145, 145, 145, 145, 145, 146
+		db 146, 146, 146, 146, 146, 147, 147, 147
+		db 147, 147, 148, 148, 148, 148, 148, 148
+		db 149, 149, 149, 149, 149, 150, 150, 150
+		db 150, 150, 150, 151, 151, 151, 151, 151
+		db 151, 152, 152, 152, 152, 152, 152, 152
+		db 153, 153, 153, 153, 153, 153, 154, 154
 
 section .bss
 
@@ -2848,6 +3107,7 @@ pixel_per_row	resd 1			; Number of pixels per row
 progress_pos	resd 1			; Progressbar current position
 ui_flags	resd 1			; UI flags
 pane_margin	resd 1			; Margin (X coordinate) of panes
+sample_rms	resd 31			; RMS values for each sample
 
 output_device	resw 1			; Output device
 amplification	resw 1			; Amplification

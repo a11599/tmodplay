@@ -1169,13 +1169,7 @@ mod_get_channel_info:
 	ret
 
 .get_info:
-	push ebx
-
-	mov bl, [mod(num_channels)]
-	call mod_playroutine_get_channel_info
-	call [dev(get_mixer_info)]
-
-	pop ebx
+	call [dev(get_chn_info)]
 	ret
 
 

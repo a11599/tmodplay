@@ -25,7 +25,7 @@ struc		mod_dev_api
 .set_mixer	resd 1			; Set volume, panning and playback speed
 .set_sample	resd 1			; Set sample to be played
 .render		resd 1			; Render audio into the output buffer
-.get_mixer_info	resd 1			; Add mixer info into mod_channel_info
+.get_chn_info	resd 1			; Get channel info
 .get_info	resd 1			; Get output device status info
 .get_position	resd 1			; Get playback position info
 .reset_channels	resd 1			; Reset playback channels

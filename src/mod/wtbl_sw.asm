@@ -814,8 +814,7 @@ mod_swt_set_mixer:
 ;------------------------------------------------------------------------------
 ; Add mixer information to mod_channel_info structure.
 ;------------------------------------------------------------------------------
-; -> BL - Number of channels
-;    ESI - Pointer to buffer receiving mod_channel_info structures
+; -> ESI - Pointer to buffer receiving mod_channel_info structures
 ; <- ESI - Filled with data
 ;------------------------------------------------------------------------------
 
@@ -826,6 +825,7 @@ mod_swt_get_mixer_info:
 	push esi
 	push edi
 
+	mov bl, [num_channels]
 	mov edi, channels
 
 .loop_channel:

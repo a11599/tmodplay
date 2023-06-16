@@ -127,15 +127,6 @@ mod_playroutine_init:
 
 	mov al, [mod(num_channels)]
 	call [dev(set_channels)]
-	mov edi, channels
-
-.loop_reset_channel:
-	mov byte [edi + channel(volume)], 64
-	mov byte [edi + channel(play_volume)], 64
-	mov word [edi + channel(sample_hdr_ofs)], 0
-	add edi, channel.strucsize
-	dec al
-	jnz .loop_reset_channel
 
 	pop edi
 	pop ecx
@@ -601,11 +592,15 @@ mod_playroutine_set_position:
 	mov al, [mod(num_channels)]	; Stop playback in all channels
 	mov ah, 0x01			; Set sample
 	xor esi, esi			; Stop sample in channel
+	mov ebx, channels
 
 .stop_channel_loop:
 	dec al				; AL: channel number
 	js .set_sequence
+	mov byte [ebx + channel(sample)], 0
+	mov dword [ebx + channel(sample_hdr_ofs)], 0
 	call [dev(set_sample)]
+	add ebx, channel.strucsize
 	jmp .stop_channel_loop
 
 .set_sequence:

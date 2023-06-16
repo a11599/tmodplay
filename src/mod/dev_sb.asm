@@ -552,6 +552,19 @@ shutdown:
 
 
 ;------------------------------------------------------------------------------
+; Set the number of active channels.
+;------------------------------------------------------------------------------
+; -> AL - Number of channels
+;------------------------------------------------------------------------------
+
+set_channels:
+	mov [num_channels], al
+	call mod_swt_set_channels
+
+	ret
+
+
+;------------------------------------------------------------------------------
 ; Set the amplification level.
 ;------------------------------------------------------------------------------
 ; -> AH.AL - Requested audio amplification in 8.8 fixed point value
@@ -997,6 +1010,7 @@ render:
 
 	; Initialize state
 
+	push dword 0			; Update channel_info by tick counter
 	push eax
 
 	mov edx, [params(buffer_size)]	; EDX: number of samples to render
@@ -1027,12 +1041,25 @@ render:
 	push ecx
 	push edx
 	push edi
+	call mod_playroutine_get_position
+	movzx ebp, dl			; EBP: current tick
 	call mod_playroutine_tick
 	pop edi
 	pop edx
 	pop ecx
 	pop ebx
 
+	mov eax, [esp]			; Restore AL from stack
+	test ebp, ebp
+	jz .main_tick			; Force channel_info update on main tick
+	cmp dword [esp + 4], 0
+	ja .skip_channel_info
+
+.main_tick:
+	call update_channel_info
+	inc dword [esp + 4]		; Increase channel_info tick update
+
+.skip_channel_info:
 	mov eax, [play_tickr_fr]
 	add [play_sam_fr], eax
 	adc ebx, 0
@@ -1066,11 +1093,15 @@ render:
 	jnz .loop_render
 
 	pop eax
+	pop ebp				; EBP: channel_info update by tick ctr
 
 	; Output buffer completely rendered
 
 	mov [play_sam_int], ebx		; Update samples until playroutine tick
-	call update_buffer_position
+	call update_buffer_position	; Update position_info for buffer
+	test ebp, ebp
+	jnz .noop
+	call update_channel_info	; Update channel_info when no tick
 
 .noop:
 
@@ -1209,6 +1240,7 @@ get_position:
 
 update_buffer_position:
 	push esi
+
 	xor esi, esi			; Save playback position for this buffer
 	cmp al, BUF_RENDER_2
 	jb .get_position
@@ -1219,6 +1251,65 @@ update_buffer_position:
 .get_position:
 	add esi, position_info
 	call mod_playroutine_get_position_info
+
+	pop esi
+	ret
+
+
+;------------------------------------------------------------------------------
+; Return current MOD channel info.
+;------------------------------------------------------------------------------
+; -> ESI - Pointer to buffer receiving mod_channel_info structures
+; <- ESI - Filled with data
+;------------------------------------------------------------------------------
+
+get_channel_info:
+	push ecx
+	push esi
+	push edi
+
+	mov edi, esi
+	mov ecx, (mod_channel_info.strucsize) / 4
+	movzx esi, byte [num_channels]
+	imul ecx, esi			; ECX: channel_info[] size
+	xor esi, esi
+	cmp byte [buffer_playprt], 1
+	jb .done
+	mov esi, mod_channel_info.strucsize * MOD_MAX_CHANS
+	je .done
+	add esi, esi
+
+.done:
+	add esi, channel_info
+	rep movsd
+
+	pop edi
+	pop esi
+	pop ecx
+	ret
+
+
+;------------------------------------------------------------------------------
+; Update channel information for a specific buffer part.
+;------------------------------------------------------------------------------
+; -> AL - Buffer part number (BUF_RENDER_n)
+;------------------------------------------------------------------------------
+
+update_channel_info:
+	push esi
+
+	xor esi, esi			; Save channel_info for this buffer
+	cmp al, BUF_RENDER_2
+	jb .get_info
+	mov esi, mod_channel_info.strucsize * MOD_MAX_CHANS
+	je .get_info
+	add esi, esi
+
+.get_info:
+	add esi, channel_info
+	call mod_playroutine_get_channel_info
+	call mod_swt_get_mixer_info
+
 	pop esi
 	ret
 
@@ -1466,7 +1557,7 @@ mod_dev_sb_api	istruc mod_dev_api
 		set_api_fn(shutdown, shutdown)
 		set_api_fn(upload_sample, mod_swt_upload_sample)
 		set_api_fn(free_sample, mod_swt_free_sample)
-		set_api_fn(set_channels, mod_swt_set_channels)
+		set_api_fn(set_channels, set_channels)
 		set_api_fn(set_amplify, set_amplify)
 		set_api_fn(set_interpol, mod_swt_set_interpolation)
 		set_api_fn(set_stereomode, mod_swt_set_stereo_mode)
@@ -1476,13 +1567,14 @@ mod_dev_sb_api	istruc mod_dev_api
 		set_api_fn(set_mixer, set_mixer)
 		set_api_fn(set_sample, mod_swt_set_sample)
 		set_api_fn(render, render)
-		set_api_fn(get_mixer_info, mod_swt_get_mixer_info)
+		set_api_fn(get_chn_info, get_channel_info)
 		set_api_fn(get_info, get_info)
 		set_api_fn(get_position, get_position)
 		set_api_fn(reset_channels, mod_swt_reset_channels)
 		iend
 
 blaster_env	db 'BLASTER', 0		; Environment var. name for detection
+num_channels	db 0			; Number of active channels
 
 		%if (LOG_LEVEL >= LOG_INFO)
 type_sb1	db '', 0
@@ -1495,6 +1587,7 @@ types		dd type_sb1, type_sb2, type_sbpro, type_sb16
 section .bss
 
 position_info	resb mod_position_info.strucsize * 3
+channel_info	resb mod_channel_info.strucsize * MOD_MAX_CHANS * 3
 params		resd (mod_dev_params.strucsize + 3) / 4
 period_base	resd 1			; Period to speed conversion base
 sample_rate	resd 1			; Actual playback sample rate
