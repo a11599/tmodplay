@@ -18,6 +18,10 @@ The main development platform is a modern PC with DOSBox, but the result is alwa
 - VIA MVP4 / Pentium MMX 233@250 MHz / Sound Blaster 16 Vibra16S (CT2800) ISA / Hercules S3 Trio64V+ PCI / MS-DOS 7.0
 - SIS 650GX/962LUA / Pentium 4 2.66 GHz / Avance Logic ALS-4000 PCI / nVidia Geforce 440MX 64 MB AGP / MS-DOS 7.0
 
+## Usage
+
+Type `tmodplay /h` to display help on command line arguments. Press F1 during playback to show the supported keyboard commands. Refer to [tmodplay.txt](tmodplay.txt) for further details.
+
 ## Building from source
 
 ### Pre-requisites

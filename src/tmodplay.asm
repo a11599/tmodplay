@@ -38,6 +38,17 @@ SCOPE_TOP	EQU 64			; Top Y coordinate of scope
 PB_HEIGHT	EQU 4			; Height of progress bar
 PB_TOP		EQU 16			; Top Y coordinate of progress bare
 
+; Constants for sample name rendering
+
+SMP_COL_WIDTH	EQU 22 * 7
+SMP_COL_1	EQU (SCOPE_WIDTH * 64 + SCOPE_PADDING * 8) - (256 - SMP_COL_WIDTH) / 2
+SMP_COL_2	EQU (SCOPE_PADDING * 8) + (256 - SMP_COL_WIDTH) / 2
+SMP_COL_HEIGHT	EQU 16 * 16
+
+; Constants for help screen rendering
+
+HELP_KEY_WIDTH	EQU 240
+
 ; CPU usage window in systimer ticks
 
 CPU_WINDOW	EQU 789
@@ -59,6 +70,7 @@ RMS_BAR_COL	EQU 0x0b		; RMS meter bar color
 
 UI_UPD_SOUND	EQU 0x00000001		; Sound settings needs to be updated
 UI_UPD_PAN	EQU 0x00000002		; Stereo panning needs to be updated
+UI_KBD_HELP	EQU 0x00000004		; Keyboard help screen is displayed
 
 
 ;------------------------------------------------------------------------------
@@ -1017,6 +1029,16 @@ ui_open:
 	call gui_draw_box
 	mov dword [progress_pos], 0
 
+	mov eax, [gui_scr_width]
+	shr eax, 1
+	sub eax, SMP_COL_1
+	mov [sample_col_1_x], eax
+	add eax, SMP_COL_1 + SMP_COL_2
+	mov [sample_col_2_x], eax
+	mov eax, [gui_scr_height]
+	sub eax, SMP_COL_HEIGHT
+	mov [sample_col_top], eax
+
 	clc
 	pop eax
 
@@ -1152,12 +1174,16 @@ ui_run:
 	; Draw scopes and RMS bars to the screen (do early to avoid tearing)
 
 	call draw_scopes
+	test dword [ui_flags], UI_KBD_HELP
+	jnz .skip_rms
 	call draw_rms_sample
 
 	; Render scopes to scope bitmap memory and calculate RMS sample values
 
-	call update_scopes
 	call update_rms
+
+.skip_rms:
+	call update_scopes
 
 	; Render audio into output device buffer
 
@@ -1283,6 +1309,7 @@ ui_run:
 	dd KC_CURSOR_LEFT, KC_CURSOR_UP, KC_PAGE_UP, 0, .seq_prev
 	dd KC_CURSOR_RIGHT, KC_CURSOR_DOWN, KC_PAGE_DOWN, 0, .seq_next
 	dd KC_HOME, 0, .seq_first
+	dd KC_F1, 0, .kbd_help_toggle
 	dd -1				; Check against ASCII codes from now
 	dd '+', 0, .vol_up
 	dd '-', 0, .vol_down
@@ -1444,6 +1471,22 @@ ui_run:
 	xor ah, ah
 	jmp .set_seq
 
+	; Toggle keyboard help info display
+
+.kbd_help_toggle:
+	test dword [ui_flags], UI_KBD_HELP
+	jz .show_help
+	and dword [ui_flags], ~UI_KBD_HELP
+	call clear_info_area
+	call draw_sample_names
+	jmp .handle_keyboard
+
+.show_help:
+	or dword [ui_flags], UI_KBD_HELP
+	call clear_info_area
+	call draw_keyboard_help
+	jmp .handle_keyboard
+
 
 ;------------------------------------------------------------------------------
 ; Displays progress bar on the UI.
@@ -1601,7 +1644,8 @@ update_rms:
 draw_rms_sample:
 	mov dh, 31			; DH: sample counter
 	mov ebx, 4			; EBX: bar height
-	mov edi, 480 - 16 * 16 + 12	; EDI: bar top Y position
+	mov edi, [sample_col_top]
+	add edi, 12			; EDI: bar top Y position
 	xor ebp, ebp			; EBP: sample RMS value pointer
 
 .bar_loop:
@@ -1633,11 +1677,11 @@ draw_rms_sample:
 .draw_bar:
 	cmp dh, 15			; Set horizontal position in ESI
 	ja .first_column
-	add esi, 320 + (SCOPE_PADDING * 8) + (256 - 22 * 7) / 2
+	add esi, [sample_col_2_x]
 	jmp .render_bar
 
 .first_column:
-	add esi, 320 - (SCOPE_WIDTH * 64 + SCOPE_PADDING * 8) + (256 - 22 * 7) / 2
+	add esi, [sample_col_1_x]
 
 .render_bar:
 	call gui_draw_box		; Render RMS bar
@@ -1645,7 +1689,8 @@ draw_rms_sample:
 .next_bar:
 	cmp dh, 16			; Reset Y coordinate at start of 2nd col
 	jne .no_column_wrap
-	mov edi, 480 - 16 * 16 + 12 - 16
+	mov edi, [sample_col_top]
+	add edi, 12 - 16
 
 .no_column_wrap:
 	add edi, 16			; Next row
@@ -1951,6 +1996,38 @@ draw_mod_title:
 
 
 ;------------------------------------------------------------------------------
+; Clears the MOD info area (sample names, keyboard help).
+;------------------------------------------------------------------------------
+; <- Destroys everything except segment registers.
+;------------------------------------------------------------------------------
+
+clear_info_area:
+
+	; Erase info area (fill with background color)
+
+	mov ebx, SMP_COL_HEIGHT
+	add ebx, 16
+	mov ecx, [gui_scr_width]
+	xor dl, dl
+	xor esi, esi
+	mov edi, [sample_col_top]
+	sub edi, 16
+	call gui_draw_box
+
+	; Clear saved sample RMS
+
+	xor eax, eax
+	mov ecx, 31
+	mov edi, sample_rms
+	rep stosd
+	mov ecx, 31
+	mov edi, prev_sample_rms
+	rep stosd
+
+	ret
+
+
+;------------------------------------------------------------------------------
 ; Draw the name of instruments to the GUI. Requires up-to-date data at
 ; mod_info_addr.
 ;------------------------------------------------------------------------------
@@ -1958,13 +2035,28 @@ draw_mod_title:
 ;------------------------------------------------------------------------------
 
 draw_sample_names:
+
+	; Print header above sample names
+
+	mov al, GUI_AL_LEFT
+	mov ebx, umsg_samples
+	mov ecx, SMP_COL_WIDTH * 2
+	mov edx, INFO_TEXT_COL
+	mov esi, [sample_col_1_x]
+	mov edi, [sample_col_top]
+	sub edi, 16
+	mov ebp, font_digits
+	call gui_draw_text
+
+	; Print sample names in two columns
+
 	mov al, GUI_AL_LEFT
 	mov ebx, [mod_info_addr]
 	lea ebx, [ebx + mod_info.samples + mod_sample_info.name]
-	mov ecx, 22 * 7
+	mov ecx, SMP_COL_WIDTH
 	mov edx, SEC_TEXT_COL
-	mov esi, 320 - (SCOPE_WIDTH * 64 + SCOPE_PADDING * 8) + (256 - 22 * 7) / 2
-	mov edi, 480 - 16 * 16
+	mov esi, [sample_col_1_x]
+	mov edi, [sample_col_top]
 	mov ebp, font_sgk075
 
 	mov ah, 16
@@ -1976,9 +2068,9 @@ draw_sample_names:
 	dec ah
 	jnz .sample_1_loop
 
-	mov ah, 15
-	mov esi, 320 + (SCOPE_PADDING * 8) + (256 - 22 * 7) / 2
-	mov edi, 480 - 16*16
+	mov ah, 15			; Second column
+	mov esi, [sample_col_2_x]
+	mov edi, [sample_col_top]
 
 .sample_2_loop:
 	call gui_draw_text
@@ -1987,9 +2079,149 @@ draw_sample_names:
 	dec ah
 	jnz .sample_2_loop
 
-	mov eax, [systimer_ticks]
-	add eax, 18			; Next vblank expected within 16.6+ ms
-	mov [prev_vblank], eax
+	; Print sample numbers before each sample row
+
+	call pmi(file_get_buf)
+	jc .done
+	mov ebx, eax
+	mov dword [ebx], ' 1'
+	mov al, GUI_AL_RIGHT
+	mov ecx, 16
+	mov edx, INFO_TEXT_COL
+	mov esi, [sample_col_1_x]
+	sub esi, 26
+	mov edi, [sample_col_top]
+	mov ebp, font_rpgsystem
+	mov ah, 16
+
+.sample_num_1_loop:
+	call gui_draw_text
+	inc byte [ebx + 1]
+	cmp byte [ebx + 1], '9'
+	jbe .sample_num_1_next
+	mov dword [ebx], '10'
+
+.sample_num_1_next:
+	add edi, 16
+	dec ah
+	jnz .sample_num_1_loop
+
+	mov ah, 15			; Second column
+	mov esi, [sample_col_2_x]
+	sub esi, 26
+	mov edi, [sample_col_top]
+
+.sample_num_2_loop:
+	call gui_draw_text
+	inc byte [ebx + 1]
+	cmp byte [ebx + 1], '9'
+	jbe .sample_num_2_next
+	inc byte [ebx]
+	mov byte [ebx + 1], '0'
+
+.sample_num_2_next:
+	add edi, 16
+	dec ah
+	jnz .sample_num_2_loop
+
+.done:
+	ret
+
+
+;------------------------------------------------------------------------------
+; Draw the keyboard help screen.
+;------------------------------------------------------------------------------
+; <- Destroys everything except segment registers.
+;------------------------------------------------------------------------------
+
+	; Keyboard help text, must be declared before function
+
+section .data
+
+	%assign umsg_kbd_idx 0
+	%macro umsg_kbd_help 2
+
+	%assign umsg_kbd_idx umsg_kbd_idx + 1
+umsg_kbd_k_ %+ umsg_kbd_idx:
+	db %1, 0
+umsg_kbd_m_ %+ umsg_kbd_idx:
+	db %2, 0
+
+	%endmacro
+
+	umsg_kbd_help 'Esc', 'Quit to DOS'
+	umsg_kbd_help 'F1', 'Toggle keyboard help / sample name display'
+	umsg_kbd_help '+, Volume +', 'Increase amplification'
+	umsg_kbd_help '-, Volume -', 'Decrease amplification'
+	umsg_kbd_help '0', 'Reset amplification to 1.0x'
+	umsg_kbd_help 'Left, Up, Page Up', 'Jump back to previous pattern sequence'
+	umsg_kbd_help 'Right, Down, Page Down', 'Jump to next pattern sequence'
+	umsg_kbd_help 'Home', 'Restart module'
+	umsg_kbd_help 'W', 'Use Watte trilinear sample interpolation'
+	umsg_kbd_help 'L', 'Use linear sample interpolation'
+	umsg_kbd_help 'N', 'Use nearest neighbor (no) sample interpolation'
+	umsg_kbd_help 'I', 'Toggle interpolation method'
+	umsg_kbd_help 'H', 'Set Amiga-style hard stereo panning'
+	umsg_kbd_help 'X', 'Set hard stereo panning with 75% crossfade'
+	umsg_kbd_help 'R', 'Set real stereo panning (MOD commands 8xx and E8x)'
+	umsg_kbd_help 'S', 'Toggle stereo panning method'
+
+section .text
+
+draw_keyboard_help:
+
+	; Print header above sample names
+
+	mov al, GUI_AL_LEFT
+	mov ebx, umsg_kbd
+	mov ecx, [gui_scr_width]
+	sub ecx, HELP_KEY_WIDTH
+	mov edx, INFO_TEXT_COL
+	mov esi, HELP_KEY_WIDTH
+	mov edi, [sample_col_top]
+	sub edi, 16
+	mov ebp, font_digits
+	call gui_draw_text
+
+	; Print keys
+
+	mov al, GUI_AL_RIGHT
+	mov ecx, HELP_KEY_WIDTH - 10
+	mov edx, INFO_TEXT_COL
+	xor esi, esi
+	mov edi, [sample_col_top]
+	mov ebp, font_rpgsystem
+
+	%assign idx 1
+	%rep umsg_kbd_idx
+
+	mov ebx, umsg_kbd_k_ %+ idx
+	call gui_draw_text
+	add edi, 16
+
+	%assign idx idx + 1
+	%endrep
+
+	; Print key actions
+
+	mov al, GUI_AL_LEFT
+	mov ecx, [gui_scr_width]
+	sub ecx, HELP_KEY_WIDTH
+	mov edx, SEC_TEXT_COL
+	mov esi, HELP_KEY_WIDTH
+	mov edi, [sample_col_top]
+	add edi, 3
+	mov ebp, font_digits
+
+	%assign idx 1
+	%rep umsg_kbd_idx
+
+	mov ebx, umsg_kbd_m_ %+ idx
+	call gui_draw_text
+	add edi, 16
+
+	%assign idx idx + 1
+	%endrep
 
 	ret
 
@@ -2754,6 +2986,8 @@ umsg_pan_hard	db 'Amiga hard panning', 0
 umsg_pan_cross	db '75% crossfeed', 0
 umsg_pan_real	db 'Real stereo', 0
 umsg_channels	db '{u} channels', 0
+umsg_samples	db 'Samples / song message', 0
+umsg_kbd	db 'Keyboard commands', 0
 
 		alignb 4
 umsg_devtab	dd MOD_OUT_DAC * 256 + MOD_DAC_SPEAKER, umsg_dev_spkr
@@ -2983,8 +3217,8 @@ vga_palette	db  0,  0,  0		; 00: background (black)
 		db 44, 42, 40		; 07: secondary text color
 		db  2, 16, 22		; 08: progress bar background color
 		db  3, 36, 51		; 09: progress bar progress color
-		db 41, 39, 16		; 0A: info text color above scope
-		db  7, 31, 11		; 0B: RMS meter bar color
+		db 55, 53, 50		; 0A: info text/label color
+		db  9, 31, 33		; 0B: RMS meter bar color
 		VGA_PALETTE_ENTRIES EQU ($ - vga_palette) / 3
 
 		; RMS square table
@@ -3103,6 +3337,9 @@ play_start_tick	resd 1			; Systimer tick at playback start
 play_seconds	resd 1			; Number of seconds since playback start
 output_info	resd (mod_output_info.strucsize + 3) / 4
 position_info	resd (mod_position_info.strucsize + 3) / 4
+sample_col_1_x	resd 1			; Sample first column X position
+sample_col_2_x	resd 1			; Sample second column X position
+sample_col_top	resd 1			; Sample column Y position
 pixel_per_row	resd 1			; Number of pixels per row
 progress_pos	resd 1			; Progressbar current position
 ui_flags	resd 1			; UI flags

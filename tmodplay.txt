@@ -1,0 +1,309 @@
+  ____________________________ Therapy MOD player ____________________________
+
+    This is a 32-bit multichannel player for MOD files created with Amiga
+    ProTracker and the numerous clones/derivatives on either the Amiga or
+    PC.
+
+
+  __________________________ Command line parameters _________________________
+
+    tmodplay <filename.mod> [options]
+
+    <filename.mod> is the name of the MOD file to play (with extension).
+
+    Supported options:
+
+    /o:device
+
+    Set the output (playback) device. Supported values for "device":
+
+    - speaker: Internal PC speaker.
+    - lpt: One or two 8-bit DACs connected to one or two parallel (printer)
+      port(s). Also known as Covox.
+    - lptst: Stereo 8-bit DAC connected to a parallel port.
+    - sb: A Sound Blaster or compatible card (see supported types below).
+      Actual device is detected from BLASTER environment variable.
+    - sb1: A pre-2.0 Sound Blaster or compatible card.
+    - sb2: Sound Blaster 2.0 or compatible card.
+    - sbpro: Sound Blaster Pro (all versions) or compatible card.
+    - sb16: Sound Blaster 16 or compatible card.
+
+    See the "Output devices" chapter for device-specific details.
+
+    /p:port[,port2]
+
+    Set the I/O port of the output device. port and port2 are hexadecimal
+    numbers or lptX strings where X stands for a parallel port number
+    between 1 - 4. See the "Output devices" chapter for device-specific
+    details.
+
+    /i:irq
+
+    Set the IRQ channel of the output device. irq is a decimal value between
+    0 - 15. See the "Output devices" chapter for device-specific details.
+
+    /d:dma[,dma16]
+
+    Set the 8-bit and 16-bit DMA channel of the output device. dma and dma16
+    are decimal values between 0 - 7. If dma16 is not specified, the 8-bit
+    DMA channel will be used for 16-bit audio playback, too. See the "Output
+    devices" chapter for device-specific details.
+
+    /sr:samplerate
+
+    Set the output (playback, mixing) sample rate. Accepted value is a
+    number between 8000 - 100000. Output devices have specific upper limits
+    on sample rate. These upper limits will be enforced even if a higher
+    amount is specified. Devices may also not support any arbitrary number.
+    For such devices, the actual sample rate (which can be observed in the
+    UI) will be set to the nearest supported value. Default value is 44100.
+    See the "Output devices" chapter for device-specific details.
+
+    /s:mode[,panpct]
+
+    Set the stereo output mode of stereo devices. Supported values for
+    "mode":
+
+    - mono: Enforce mono output (fastest)
+    - hard: Hard left/right panning as on Amiga (fast)
+    - cross: Hard left/right panning with 75% crossfade (slower)
+    - real: Real panning via 8xx and E8x MOD commands (slowest)
+
+    "panpct" can be used to set the initial panning from center (mono) when
+    using "real" mode in percentage. Default value is 0%. For example to
+    initialize channels for a 75% crossfade, set "panpct" to 25 (25% from
+    center = 75% crossfade).
+
+    By default, tmodplay will select "real" with all channels initially
+    panned to center when the MOD file contains 8xx and/or E8x commands,
+    otherwise it uses "cross".
+
+    /amp:amplification
+
+    Set initial output amplification between 0.00 - 4.00. The value is a
+    decimal, default is 1.00.
+
+    /ipol:mode
+
+    Set initial sample interpolation mode. Supported values for "mode":
+
+    - nearest: No interpolation (or nearest neighbor or zero-order hold),
+      similar, but not quite the same as the Amiga. Produces horrible
+      artifacts, but some songs (especially older, size-optimized ones)
+      rely on it heavily for treble extension. This is the fastest mode of
+      interpolation.
+    - linear: 8-bit linear interpolation, sound quality is similar to Gravis
+      Ultrasound (a bit lower, since the GUS does 16-bit interpolation). A
+      big step up from "nearest" in terms of quality, but some MODs can
+      sound dull due to less treble extension by upsampling artifacts. Much
+      slower, than "nearest".
+    - watte: 16-bit trilinear interpolation, very nice upsampling quality
+      with very little artifacts and cleaner treble with good quality
+      samples. May sound extremely dull due to missing high frequencies
+      with some MODs that use low quality (low sample rate) samples. This is
+      the slowest mode, especially with "real" stereo mode. A fast 486 or
+      Pentium is recommended for this interpolation mode.
+
+    Default value is "linear" if the MOD uses 8xx or E8x effects, the MOD
+    has non-ProTracker notes (extended octaves) or the number of channels is
+    not 4 (assuming the MOD was made on PC where composers mostly used a GUS
+    in this era). Otherwise the default is "nearest".
+
+    /?
+
+    Displays short information on command-line arguments.
+
+
+  ______________________________ Output devices ______________________________
+
+    Internal PC speaker
+    -------------------
+
+    This is the speaker built into your PC. It may be a cone or a small
+    piezo buzzer, depending on your motherboard. Cone speakers sound a bit
+    better and louder while piezo buzzers will only produce a very tinny
+    faint sound, but honestly, both will sound pretty terrible.
+
+    The PC speaker was only meant to produce beeps, tmodplay uses PWM
+    technique to output sampled audio. The output bitdepth ranges from 5.3
+    to 6 bits, depending on the sample rate. Since higher sample rates
+    reduce output bitdepth (a limitation of the PWM technique), maximum
+    sample rate is limited to 29000 Hz.
+
+    The PC speaker is the default output device if nothing else was detected
+    by tmodplay. Use /o:speaker to force using the PC speaker. The PC
+    speaker is a fixed configuration device, there is no need to configure
+    I/O port, IRQ or DMA (/p, /i and /d arguments are ignored). The PC
+    speaker uses the timer interrupt (IRQ 0) at the specified sample rate
+    for audio playback.
+
+
+    Parallel port DAC
+    -----------------
+
+    These funky devices connect to the parallel (printer) port of the PC and
+    can range from a bunch of simple resistors to integrated circuits doing
+    digital to analog conversion. The idea is simple: the parallel port has
+    8 TTL outputs which can be set by a simple write to an I/O port. By
+    using appropriate resistors (or an 8-bit D/A converter IC) you can have
+    an 8-bit "sound card" that plays digital audio.
+
+    It's also known as Covox. This is such a simple device that even you can
+    build one yourself, hence it was popular back in the day with poor kids,
+    myself included. Nowadays it's more like a gem, I would rather recommend
+    an SB16, even a cheap Vibra 16C would be a much better solution and you
+    get much better quality (16 bits) and DOS game compatibility.
+
+    Check the following URLs for LPT DAC related information:
+    https://en.wikipedia.org/wiki/Covox_Speech_Thing
+    https://www.vogons.org/viewtopic.php?f=62&t=51483
+
+    There are three variations of the LPT DAC output:
+
+    1. One DAC on a parallel port for mono 8-bit output.
+    2. Two DACs on two parallel ports for stereo 8-bit output.
+    3. Stereo DAC (using stereo D/A converter IC) for stereo 8-bit output
+       (also known as stereo-on-1).
+
+    For setup 1, use /o:lpt. This defaults to output sound on LPT1. If your
+    DAC is connected to a different printer port, use /p:lptX (where X is
+    the number of the LPT port between 1 - 4) to specify the printer port.
+    If the printer port is on a non-standard I/O port or the BIOS doesn't
+    recognize it for some reason, use /p:XXX to specify the I/O port, where
+    XXX is the hexadecimal I/O port address of the printer port.
+
+    For setup 2, use /o:lpt with /p:lptX,lptY, where X and Y specify the
+    number of the printer port between 1 - 4 for the left and right channel,
+    respectively. If the printer port uses a non-standard I/O port or the
+    BIOS doesn't recognize it for some reason, specify the hexadecimal I/O
+    port of the parallel port instead of lptX and/or lptY directly.
+
+    Setup 3's setup is identical to setup 1, but you need to use /o:lptst.
+    These things are pretty rare (were rare even back in the day as their
+    cost was rivaling real sound cards). tmodplay uses the strobe and auto
+    linefeed pins to select output channel the following way:
+
+    - Strobe (pin 1): output on left channel when high
+    - Auto line feed (pin 14): output on right channel when high
+
+    For mono output, tmodplay sets both strobe and auto line feed to high to
+    enable both channels. Not all stereo-on-1 devices implement this (some
+    only use strobe or auto line feed to toggle left/right) and hence may
+    only play mono audio on one channel (either left or right, depending on
+    implementation).
+
+    Parallel port DAC playback uses the timer interrupt (IRQ 0) at the
+    specified sample rate. The maximum supported value is 100000 Hz, but
+    this is more like a gem, rather than a useful feature. Timer interrupts
+    at this rate use a lot of CPU and output quality won't really improve.
+    You are better served by spending CPU time on a better quality
+    interpolation.
+
+    Arguments /i and /d are ignored by this device.
+
+
+    Sound Blaster
+    -------------
+
+    Sound Blasters are supported from the original Sound Blaster (referred
+    to as 1.0) up to the Sound Blaster 16 and their compatibles. Playback
+    routines follow the official Sound Blaster documentation and should have
+    good compatibility with Sound Blaster clones.
+
+    Sound Blasters use DMA for sound transfer and use less CPU than the PC
+    speaker or parallel port DAC.
+
+    Supported flavors of Sound Blasters:
+
+    - Sound Blaster 1.0 (original Sound Blaster): 8-bit mono playback up to
+      22222 Hz.
+    - Sound Blaster 2.0: 8-bit mono playback up to 43478 Hz.
+    - Sound Blaster Pro: 8-bit mono playback up to 43478 Hz or 8-bit stereo
+      playback up to 22222 Hz.
+    - Sound Blaster 16: 16-bit mono or stereo playback up to 44100 Hz.
+
+    If the BLASTER environment variable is present, tmodplay will parse it
+    and use the setup specified there. This is equivalent to using the /o:sb
+    command line parameter.
+
+    If the BLASTER environment variable is not set (or not set properly),
+    you can force output for a specific model with the following arguments:
+
+    - /o:sb1: Force original Sound Blaster output.
+    - /o:sb2: Force Sound Blaster 2.0 output.
+    - /o:sbpro: Force Sound Blaster Pro output.
+    - /o:sb16: Force Sound Blaster 16 output.
+
+    If the BLASTER environment variable is not set (or not set properly),
+    use /p:XXX to set the Sound Blaster base port in hexadecimal (default:
+    220), /i:XX to set the Sound Blaster IRQ (default: 5) and /d:X to set
+    the DMA channel. For the Sound Blaster 16, you can specify two DMA
+    channels in the form /d:X,Y, where X is used for 8-bit playback and Y is
+    used for 16-bit audio (they can be the same). Since tmodplay always does
+    16-bit playback on the Sound Blaster 16, only the second value will
+    actually be used. If only one DMA channel is specified, it will be used
+    for both bitdepths.
+
+    Sound Blasters have some interesting quirks:
+
+    - The original Sound Blaster 1.0 does not support auto-init DMA. This
+      means there are some sound hiccups at the end of the ouput buffer
+      (about 20 times per second) when playback is restarted. This hiccup is
+      not very audible most of the time though.
+
+    - The Sound Blaster Pro uses a special solution to output stereo. It
+      uses a cheap trick via a flip-flop implemented in the output mixer to
+      switch between left and right channel after every sample. This causes
+      a 1-sample delay between channels (not really audible). More
+      importantly, this terrible solution was not implemented on the Sound
+      Blaster 16, so don't expect stereo from a Sound Blaster 16 when
+      forcing Sound Blaster Pro mode in stereo.
+
+    Sound Blasters also have all sorts of other quirks, but none of them are
+    relevant for tmodplay.
+
+
+  ______________________________ User interface ______________________________
+
+    The player displays a VGA 640x480 16-color GUI during playback. The GUI
+    contains the following elements:
+
+    - CPU usage in the top left corner
+    - Title of the MOD or name of MOD file if the title is empty in the top
+      center
+    - Elapsed time since playback started in the top right corner
+    - Playback progress bar based on current song position below the MOD
+      title
+    - Oscilloscope of the output waveform (one or two scopes depending on
+      mono or stereo output)
+    - Rendering info above scopes on the left:
+      - Stereo output mode
+      - Amplification
+      - Interpolation mode
+    - Output info above scopes on the right:
+      - Number of channels
+      - Output device and sample rate
+    - Name of samples in the MOD file in two columns below oscilloscopes and
+      an RMS meter for samples currently being played or info about keyboard
+      shortcuts
+
+    The following keyboard commands are accepted by the player:
+
+    Esc: Stop playback and exit to DOS
+    F1: Toggle keyboard help / sample name display
+    + / Volume +: Increase amplification
+    - / Volume -: Decrease amplification
+    0: Reset amplification to 1.0x
+    Left / Up / Page Up: Jump back to previous pattern sequence
+    Right / Down / Page Down: Jump to next pattern sequence
+    Home: Restart module
+    W: Use Watte trilinear sample interpolation
+    L: Use linear sample interpolation
+    N: Use nearest neighbor interpolation (also known as zero order hold or
+       no interpolation, although the latter is technically not correct)
+    I: Toggle interpolation method (nearest -> linear -> Watte)
+    H: Set Amiga-style hard panning
+    X: Set Amiga-style hard panning with 75% crossfade
+    R: Set real stereo panning, channels are positioned between left and
+       right as specified via 8xx and E8x MOD commands
+    S: Toggle stereo panning method (hard -> 75% crossfade -> real)
