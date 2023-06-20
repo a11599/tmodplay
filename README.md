@@ -2,6 +2,8 @@
 
 This is the modern remake of a multichannel [MOD](https://en.wikipedia.org/wiki/MOD_(file_format)) player I wrote back in the mid-90's for retro PC platforms. Why? Because programming for limited hardware with direct control over it is a challenging, but rewarding fun. Also this old modplayer of mine was lost back in the day in a sad hard drive accident and burned a hole in my heart. So it was about time to rebuild it and make it even better than it ever was to heal my wounds finally.
 
+![Screenshot playing dope.mod](tmodplay.png)
+
 It requires a 386 or above running MS-DOS or Windows 9x/ME, or an emulator such as DOSBox. It is written in full assembly using [PMI, my own 32-bit protected mode host](https://github.com/a11599/pmi). The MOD player supports ProTracker format and its close derivates up to 32 channels on the following sound cards:
 
 - No sound (keeps the player running without actually playing anything)
