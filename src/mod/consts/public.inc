@@ -60,7 +60,7 @@ MOD_BUF_1632BIT	EQU 0x02		; 16-bit output buffer in 32-bit words
 MOD_BUF_CHANNEL	EQU 0x0C		; Channel mask
 MOD_BUF_1CHN	EQU 0x00		; 1 channel buffer (mono)
 MOD_BUF_2CHN	EQU 0x04		; 2 channel buffer (stereo)
-MOD_BUF_2CHNL	EQU 0x0A		; 2 channel, only left used (mono)
+MOD_BUF_2CHNL	EQU 0x08		; 2 channel, only left used (mono)
 
 MOD_BUF_RANGE	EQU 0x10		; Value range mask
 MOD_BUF_INT	EQU 0x00		; Signed sample data

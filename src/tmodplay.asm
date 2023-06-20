@@ -1897,6 +1897,12 @@ draw_output_device:
 ;------------------------------------------------------------------------------
 
 draw_stereo_mode:
+	mov al, [output_info + mod_output_info.buffer_format]
+	and al, MOD_BUF_CHANNEL
+	cmp al, MOD_BUF_1CHN
+	je .mono
+	cmp al, MOD_BUF_2CHNL
+	je .mono
 	movzx eax, byte [dev_params + mod_dev_params.stereo_mode]
 	cmp al, MOD_PAN_MONO
 	je .done
@@ -1907,12 +1913,14 @@ draw_stereo_mode:
 	mov esi, [mod_info_addr]
 	test dword [esi + mod_info.flags], MOD_FLG_PAN
 	jnz .get_string
+
+.mono:
 	mov esi, umsg_pan_mono
 	jmp .render_stereo_mode
 
 .get_string:
 	mov esi, umsg_pantab
-	call lookup_message		; Get interpolation name from lookup table
+	call lookup_message		; Get panning name from lookup table
 	test esi, esi
 	jz .done
 
