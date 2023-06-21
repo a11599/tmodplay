@@ -38,43 +38,50 @@ The build toolchain is also available for Linux, but I only build under DOS and 
 
 Download and install the dependencies, then:
 
-- Make sure Open Watcom binaries are available in `PATH` and the `WATCOM` environment variable is correctly set. The installer should do this for you, but if you just copied files over from somewhere else, you have to do this yourself.
-- Copy `makeinit.sam` to `makeinit` and set correct paths for `nasm.exe` (NASM command line compiler) and `wlink.exe` (Watcom linker). Normally you don't need to change the path to `wlink.exe` as long as its available in `PATH`.
-- Copy `test_bat.sam` to `test.bat` and adjust `file` and `args` environment variables according to your testing requirements. `file` should point to a MOD file and `args` contains parameters to the player. Run `tmodplay /h` to display the available command line parameters.
+- Copy `makeinit.sam` to `makeinit` and set the following parameters:
+  - `nasm_dir`: Path to directory containing nasm.exe (NASM binary).
+  - `watcom_dir`: Path to directory containing Open Watcom platform-dependent binaries.
+  - If both of them are added to system `PATH`, you don't need to create a `makeinit` file.
+- Copy `test_bat.sam` to `test.bat` and adjust `file` and `args` environment variables according to your testing requirements. `file` should point to a MOD file and `args` contains parameters to the player. Run `tmodplay /h` to display the available command line parameters or refer to [tmodplay.txt](tmodplay.txt).
 - (optional) When using DOSBox-X for development on a modern PC, copy `emu\env_bat.sam` to `emu\env.bat` and adjust the path of `dosbox-x.exe` in the file to your actual install directory.
-- Download [PMI](https://github.com/a11599/pmi) and extract it into the same parent as of tmodplay. The folder structure should look like this:
+- Download [PMI](https://github.com/a11599/pmi), extract it into the same parent as of tmodplay and run `wmake dist` in the PMI folder. The folder structure should look like this:
 
 ```
   |
   +-- pmi
   |   |
-  |   +-- rtl
-  |   +-- api
+  |   +-- build
+  |   +-- dist
+  |   +-- emu
+  |   +-- lib
+  |   +-- src
   |       ...
   |
   +-- tmodplay
       |
-      +-- src
       +-- emu
+      +-- src
           ...
 ```
 
+- Create the `mod` directory under `tmodplay` and copy some MOD files into this folder for testing.
+
 ### Building the executable
 
-In the project root directory, run `wmake` to create a debug build of tmodplay to `bin\tmod_dbg.exe`. This will create `.obj` files, `tmod_dbg.lnk` linker directives and `tmod_dbg.map` segment/symbol map in the `obj` directory.
+In the project root directory, run `wmake` to create a debug build to `build\debug\tmodplay.exe`. Run `wmake build=release` to create a release build to `build\release\tmodplay.exe`
 
-The following `wmake` targets are also available:
+The following `wmake` targets are also available (append after `wmake` or `wmake build=release`):
 
-- `wmake debug`: Same as `wmake`. Creates an incremental debug build to `bin\tmod_dbg.exe` (recompiles only changed files).
-- `wmake release`: Creates a release version to `bin\tmodplay.exe` without debug logging. Always a full compile.
-- `wmake clean`: Removes files created during the build process.
+- `wmake clean`: Remove compiled binaries in `build\debug` or `build\release` directory.
+- `wmake full`: Force a full recompilation (compilation by default is incremental, only changed source code is recompiled).
+- `wmake dist`: Create a binary distribution package to `dist` directory.
 
 To speed up the development process, two simple batch files are also provided:
 
 - `make.bat`: Invokes `wmake` to create an incremental debug build and executes `test.bat` to test the executable. Requires MS-DOS, or Windows 9x/ME DOS box.
 - `makedb.bat`: Invokes `wmake` to create an incremental debug build and executes `test.bat` using DOSBox-X to test the executable.
 
-To start DOSBox-X with the same environment as `makedb.bat`, run `emu\dosbox.bat`. You can then manually test the build by running `test.bat` or executing `bin\tmodplay.exe` with your custom parameters.
+To start DOSBox-X with the same environment as `makedb.bat`, run `emu\dosbox.bat`. You can then manually test the build by running `test.bat` or executing `build\debug\tmodplay.exe` with your custom parameters.
 
 ## Why 386 and why protected mode?
 

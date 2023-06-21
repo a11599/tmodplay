@@ -1,5 +1,6 @@
-/bin
-/obj
+/build
+/dist
+/mod
 /makeinit
 /test.bat
 /emu/env.bat

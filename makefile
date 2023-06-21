@@ -6,26 +6,75 @@
 
 nasm_pe_opts = -i "src" -i "../pmi/src" -f win32
 
-# Target file names and directories
+# Build mode
+# Set to "release" in command line parameter to create a release build.
+# Example for full recompilation of the release version:
+# wmake build=release full
 
-dist_bin = bin				# Binary EXE file target directory
-
-# PMI stub EXE file to link with the application
-
-stub = ..\pmi\bin\pmi.exe
-stub_dbg = ..\pmi\bin\pmi_dbg.exe
+build = debug
 
 # Target application EXE file without extension
 
-app = tmodplay
-app_dbg = tmod_dbg
+tmodplay = build build\$(build) build\$(build)\obj build\$(build)\obj\mod build\$(build)\obj\gui &
+	build\$(build)\tmodplay.exe
 
-# Build targets
-# debug (default): Incremental build with debugging enabled.
-# release: Clean build without debugging. Deletes object files after the build.
+# PMI stub EXE file to link with the application
 
-debug: enable_debug $(dist_bin)\$(app_dbg).exe
-release: clean $(dist_bin)\$(app).exe clean_app_obj
+pmi = ..\pmi\build\$(build)\pmi.exe
+
+# Validate build target environment value
+
+build_ok = 0
+!ifeq build debug
+%log_level = debug
+debug_objs = ..\pmi\build\$(build)\rtl\log.obj
+build_ok = 1
+!endif
+!ifeq build release
+%log_level =
+debug_objs =
+build_ok = 1
+!endif
+!ifneq build_ok 1
+pmi = abort
+rtl = abort
+!endif
+
+# Append \ at the end of nasm/watcom path variables if not empty
+
+!ifneq nasm_dir
+nasm_dir = $(nasm_dir)\
+!endif
+!ifneq watcom_dir
+watcom_dir = $(watcom_dir)\
+!endif
+
+# Build application
+
+incremental: $(tmodplay)
+full: clean $(tmodplay)
+
+# Create binary distribution package
+
+dist: .SYMBOLIC
+	$(watcom_dir)wmake full
+	$(watcom_dir)wmake build=release full
+	@if not exist dist mkdir dist
+	@if not exist dist\debug mkdir dist\debug
+	@if not exist dist\release mkdir dist\release
+	@copy build\debug\*.exe dist\debug
+	@copy build\release\*.exe dist\release
+	@copy tmodplay.txt dist
+
+# Cleanup
+
+clean: .SYMBOLIC .MULTIPLE
+	@if exist build\$(build)\obj\mod del /q build\$(build)\obj\mod\*.*
+	@if exist build\$(build)\obj\gui del /q build\$(build)\obj\gui\*.*
+	@if exist build\$(build)\obj del /q build\$(build)\obj\*.*
+	@if exist build\$(build)\obj\mod rmdir build\$(build)\obj\mod
+	@if exist build\$(build)\obj\gui rmdir build\$(build)\obj\gui
+	@if exist build\$(build)\obj rmdir build\$(build)\obj
 
 
 #------------------------------------------------------------------------------
@@ -35,99 +84,85 @@ release: clean $(dist_bin)\$(app).exe clean_app_obj
 # List of application objects
 
 app_objs = &
-	..\pmi\rtl\string.obj &
-	..\pmi\rtl\env_arg.obj &
-	..\pmi\rtl\irq.obj &
-	..\pmi\rtl\timer.obj &
-	..\pmi\rtl\systimer.obj &
-	..\pmi\rtl\keyboard.obj &
-	..\pmi\rtl\profiler.obj &
-	obj\gui\setup.obj &
-	obj\gui\draw.obj &
-	obj\mod\convert.obj &
-	obj\mod\dev_dac.obj &
-	obj\mod\dev_none.obj &
-	obj\mod\dev_sb.obj &
-	obj\mod\player.obj &
-	obj\mod\routine.obj &
-	obj\mod\wtbl_sw.obj &
-	obj\tmodplay.obj
+	..\pmi\build\$(build)\rtl\string.obj &
+	..\pmi\build\$(build)\rtl\env_arg.obj &
+	..\pmi\build\$(build)\rtl\irq.obj &
+	..\pmi\build\$(build)\rtl\timer.obj &
+	..\pmi\build\$(build)\rtl\systimer.obj &
+	..\pmi\build\$(build)\rtl\keyboard.obj &
+	..\pmi\build\$(build)\rtl\profiler.obj &
+	build\$(build)\obj\gui\setup.obj &
+	build\$(build)\obj\gui\draw.obj &
+	build\$(build)\obj\mod\convert.obj &
+	build\$(build)\obj\mod\dev_dac.obj &
+	build\$(build)\obj\mod\dev_none.obj &
+	build\$(build)\obj\mod\dev_sb.obj &
+	build\$(build)\obj\mod\player.obj &
+	build\$(build)\obj\mod\routine.obj &
+	build\$(build)\obj\mod\wtbl_sw.obj &
+	build\$(build)\obj\tmodplay.obj
 
-debug_objs = &
-	..\pmi\rtl\log.obj
+# Abort if unknown build environment is given
 
-# Enable debug build
+abort:
+	echo "$(build)" is not a valid build target.
+	@%abort
 
-enable_debug: .SYMBOLIC
-	set LOG_LEVEL=DEBUG
+# Create directory for binary files
 
-# Cleanup
+build: .SYMBOLIC .ALWAYS
+	@if not exist build mkdir build
 
-clean: clean_app_obj .SYMBOLIC
-	set LOG_LEVEL=
-	if exist $(dist_bin)\$(app).exe del $(dist_bin)\$(app).exe
+build\$(build): build .SYMBOLIC .ALWAYS
+	@if not exist build\$(build) mkdir build\$(build)
 
-clean_app_obj: .SYMBOLIC .MULTIPLE
-	if exist obj del obj\*.obj >nul
-	if exist obj\mod del obj\mod\*.obj >nul
-	if exist obj\gui del obj\gui\*.obj >nul
+build\$(build)\obj: build\$(build) .SYMBOLIC .ALWAYS
+	@if not exist build\$(build)\obj mkdir build\$(build)\obj
+
+build\$(build)\obj\mod: build\$(build)\obj .SYMBOLIC .ALWAYS
+	@if not exist build\$(build)\obj\mod mkdir build\$(build)\obj\mod
+
+build\$(build)\obj\gui: build\$(build)\obj .SYMBOLIC .ALWAYS
+	@if not exist build\$(build)\obj\gui mkdir build\$(build)\obj\gui
 
 # Binary build and link
 
-$(dist_bin)\$(app_dbg).exe: obj $(app_objs) $(debug_objs)
-	@if not exist $(dist_bin) mkdir $(dist_bin)
-	@%write obj\$(app_dbg).lnk NAME $(dist_bin)\$(app_dbg)
-	@%write obj\$(app_dbg).lnk OPTION map=obj\$(app_dbg).map
-	@%write obj\$(app_dbg).lnk OPTION stub=$(stub_dbg)
-	@%write obj\$(app_dbg).lnk OPTION start=_main
-	@%write obj\$(app_dbg).lnk OPTION stack=4096
-	@%write obj\$(app_dbg).lnk FORM Windows NT TNT
-	@%write obj\$(app_dbg).lnk FILE {$(app_objs) $(debug_objs)}
-	$(wlink) @obj\$(app_dbg).lnk
-
-$(dist_bin)\$(app).exe: obj $(app_objs) $(debug_objs)
-	@if not exist $(dist_bin) mkdir $(dist_bin)
-	@%write obj\$(app).lnk NAME $(dist_bin)\$(app)
-	@%write obj\$(app).lnk OPTION map=obj\$(app).map
-	@%write obj\$(app).lnk OPTION stub=$(stub)
-	@%write obj\$(app).lnk OPTION start=_main
-	@%write obj\$(app).lnk OPTION stack=4096
-	@%write obj\$(app).lnk FORM Windows NT TNT
-	@%write obj\$(app).lnk FILE {$(app_objs)}
-	$(wlink) @obj\$(app).lnk
-
-# Create obj directory for .obj files
-
-obj: .SYMBOLIC .ALWAYS
-	@if not exist obj mkdir obj
-	@if not exist obj\mod mkdir obj\mod
-	@if not exist obj\gui mkdir obj\gui
+build\$(build)\tmodplay.exe: $(app_objs) $(debug_objs) build\$(build)
+	@%create build\$(build)\obj\tmodplay.lnk
+	@%write build\$(build)\obj\tmodplay.lnk NAME build\$(build)\tmodplay
+	@%write build\$(build)\obj\tmodplay.lnk OPTION map=build\$(build)\obj\tmodplay.map
+	@%write build\$(build)\obj\tmodplay.lnk OPTION stub=$(pmi)
+	@%write build\$(build)\obj\tmodplay.lnk OPTION start=_main
+	@%write build\$(build)\obj\tmodplay.lnk OPTION stack=4096
+	@%write build\$(build)\obj\tmodplay.lnk FORM Windows NT TNT
+	@%write build\$(build)\obj\tmodplay.lnk FILE {$(app_objs) $(debug_objs)}
+	$(watcom_dir)wlink @build\$(build)\obj\tmodplay.lnk
 
 # .inc file dependencies
 
 src\gui\api\gui.inc: &
 	src\gui\consts\public.inc
 
-	wtouch src\gui\api\gui.inc
+	$(watcom_dir)wtouch src\gui\api\gui.inc
 
 src\mod\api\mod.inc: &
 	src\mod\consts\public.inc &
 	src\mod\structs\public.inc
 
-	wtouch src\mod\api\mod.inc
+	$(watcom_dir)wtouch src\mod\api\mod.inc
 
 # .obj file dependencies with included external files and build instructions
 
-obj\gui\setup.obj: src\gui\setup.asm &
+build\$(build)\obj\gui\setup.obj: src\gui\setup.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\string.inc &
 	..\pmi\src\rtl\api\log.inc &
 	src\gui\config.inc &
 	src\gui\consts\public.inc
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-obj\gui\draw.obj: src\gui\draw.asm &
+build\$(build)\obj\gui\draw.obj: src\gui\draw.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\string.inc &
 	..\pmi\src\rtl\api\log.inc &
@@ -135,13 +170,13 @@ obj\gui\draw.obj: src\gui\draw.asm &
 	src\gui\api\setup.inc &
 	src\gui\consts\public.inc
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-obj\mod\convert.obj: src\mod\convert.asm
+build\$(build)\obj\mod\convert.obj: src\mod\convert.asm
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-obj\mod\dev_dac.obj: src\mod\dev_dac.asm &
+build\$(build)\obj\mod\dev_dac.obj: src\mod\dev_dac.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\string.inc &
 	..\pmi\src\rtl\api\log.inc &
@@ -155,9 +190,9 @@ obj\mod\dev_dac.obj: src\mod\dev_dac.asm &
 	src\mod\structs\dev.inc &
 	src\mod\consts\dev.inc
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-obj\mod\dev_none.obj: src\mod\dev_none.asm &
+build\$(build)\obj\mod\dev_none.obj: src\mod\dev_none.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\string.inc &
 	..\pmi\src\rtl\api\log.inc &
@@ -166,9 +201,9 @@ obj\mod\dev_none.obj: src\mod\dev_none.asm &
 	src\mod\api\routine.inc &
 	src\mod\structs\dev.inc
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-obj\mod\dev_sb.obj: src\mod\dev_sb.asm &
+build\$(build)\obj\mod\dev_sb.obj: src\mod\dev_sb.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\env_arg.inc &
 	..\pmi\src\rtl\api\string.inc &
@@ -182,9 +217,9 @@ obj\mod\dev_sb.obj: src\mod\dev_sb.asm &
 	src\mod\structs\dev.inc &
 	src\mod\consts\dev.inc
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-obj\mod\player.obj: src\mod\player.asm &
+build\$(build)\obj\mod\player.obj: src\mod\player.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\env_arg.inc &
 	..\pmi\src\rtl\api\string.inc &
@@ -197,9 +232,9 @@ obj\mod\player.obj: src\mod\player.asm &
 	src\mod\structs\mod_file.inc &
 	src\mod\structs\dev.inc
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-obj\mod\routine.obj: src\mod\routine.asm &
+build\$(build)\obj\mod\routine.obj: src\mod\routine.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\string.inc &
 	..\pmi\src\rtl\api\log.inc &
@@ -210,9 +245,9 @@ obj\mod\routine.obj: src\mod\routine.asm &
 	src\mod\consts\dev.inc &
 	src\mod\structs\dev.inc
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-obj\mod\wtbl_sw.obj: src\mod\wtbl_sw.asm &
+build\$(build)\obj\mod\wtbl_sw.obj: src\mod\wtbl_sw.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\string.inc &
 	..\pmi\src\rtl\api\log.inc &
@@ -221,9 +256,9 @@ obj\mod\wtbl_sw.obj: src\mod\wtbl_sw.asm &
 	src\mod\consts\dev.inc &
 	src\mod\structs\mod_file.inc
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-obj\tmodplay.obj: src\tmodplay.asm &
+build\$(build)\obj\tmodplay.obj: src\tmodplay.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\env_arg.inc &
 	..\pmi\src\rtl\api\string.inc &
@@ -234,4 +269,4 @@ obj\tmodplay.obj: src\tmodplay.asm &
 	src\fonts\sgk075.inc &
 	src\fonts\digits.inc
 
-	$(nasm) $(nasm_pe_opts) $[@ -o $^@
+	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@

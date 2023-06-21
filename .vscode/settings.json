@@ -3,11 +3,10 @@
     "editor.tabSize": 8,
     "editor.rulers": [80],
     "files.exclude": {
+        "build/": true,
         "dist/": true,
-        "obj/": true,
-        "pcem/": true,
-        "scratch/": true,
-        "dosbox-x.conf": true
+        "mod/": true,
+        "scratch/": true
     },
     "files.trimTrailingWhitespace": true
 }
