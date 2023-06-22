@@ -1,32 +1,47 @@
-# Therapy MOD player (tmodplay)
+This is
+
+Therapy MOD player (tmodplay)
+=============================
+
+_a 32-bit protected mode DOS player for MOD music format_
+
+- Multichannel support
+- Optimized 16-bit mixers
+- Variable amplification with clipping
+- Various sample interpolation methods
+- Stereo crossfade for hard panned (Amiga) MODs
+- Real stereo mode for MODs utilizing panning commands
+- 640x480 graphical user interface with scopes and RMS meters
+
+
+# Primer
 
 This is the modern remake of a multichannel [MOD](https://en.wikipedia.org/wiki/MOD_(file_format)) player I wrote back in the mid-90's for retro PC platforms. Why? Because programming for limited hardware with direct control over it is a challenging, but rewarding fun. Also this old modplayer of mine was lost back in the day in a sad hard drive accident and burned a hole in my heart. So it was about time to rebuild it and make it even better than it ever was to heal my wounds finally.
 
 ![Screenshot playing dope.mod](tmodplay.png)
 
-It requires a 386 or above running MS-DOS or Windows 9x/ME, or an emulator such as DOSBox. It is written in full assembly using [PMI, my own 32-bit protected mode host](https://github.com/a11599/pmi). The MOD player supports ProTracker format and its close derivates up to 32 channels on the following sound cards:
+It requires a 386 or above running MS-DOS or Windows 9x/ME, or an emulator such as DOSBox. It is written in full assembly using [PMI, my own 32-bit protected mode host](https://github.com/a11599/pmi) and [mod, my own MOD player library for PMI](https://github.com/a11599/mod). The MOD player supports ProTracker format and its close derivates up to 32 channels on the following sound cards:
 
-- No sound (keeps the player running without actually playing anything)
 - PC speaker up to 29 kHz sample rate
 - LPT DAC variants (single, dual, stereo) up to 100 kHz sample rate
 - Sound Blaster, Pro and 16 up to 22/44.1 kHz sample rate (depending on actual model)
 
 An extremely optimized software wavetable with 16-bit mixing, optional linear and trilinear Watte interpolation upsampling is included for non-wavetable sound cards (all of them for now, but at least GUS support is planned in the future). Stereo is supported with hard pan or 75% crossfeed. True stereo panning via 8xx and E8x MOD commands is also available.
 
-According to 86Box, this thing should be able to play [dope.mod](https://modarchive.org/index.php?request=view_by_moduleid&query=35344) at 33 kHz in stereo through a Sound Blaster 16 with linear interpolation on a 486 DX2/66.
-
 The main development platform is a modern PC with DOSBox, but the result is always tested (also some parts are developed) on actual retro hardware:
 
 - VIA MVP4 / Pentium MMX 233@250 MHz / Sound Blaster 16 Vibra16S (CT2800) ISA / Hercules S3 Trio64V+ PCI / MS-DOS 7.0
 - SIS 650GX/962LUA / Pentium 4 2.66 GHz / Avance Logic ALS-4000 PCI / nVidia Geforce 440MX 64 MB AGP / MS-DOS 7.0
 
-## Usage
+
+# Usage
 
 Type `tmodplay /h` to display help on command line arguments. Press F1 during playback to show the supported keyboard commands. Refer to [tmodplay.txt](tmodplay.txt) for further details.
 
-## Building from source
 
-### Pre-requisites
+# Building from source
+
+## Pre-requisites
 
 The app can be built under DOS and Windows. The build uses the following toolchain:
 
@@ -44,7 +59,11 @@ Download and install the dependencies, then:
   - If both of them are added to system `PATH`, you don't need to create a `makeinit` file.
 - Copy `test_bat.sam` to `test.bat` and adjust `file` and `args` environment variables according to your testing requirements. `file` should point to a MOD file and `args` contains parameters to the player. Run `tmodplay /h` to display the available command line parameters or refer to [tmodplay.txt](tmodplay.txt).
 - (optional) When using DOSBox-X for development on a modern PC, copy `emu\env_bat.sam` to `emu\env.bat` and adjust the path of `dosbox-x.exe` in the file to your actual install directory.
-- Download [PMI](https://github.com/a11599/pmi), extract it into the same parent as of tmodplay and run `wmake dist` in the PMI folder. The folder structure should look like this:
+- Download [PMI](https://github.com/a11599/pmi), extract it into the same parent as of tmodplay and run `wmake dist` in the PMI folder.
+- Download [mod](https://github.com/a11599/mod), and extract it into the same parent as of tmodplay.
+- Create the `mod` directory under `tmodplay` and copy some MOD files into this folder for testing.
+
+The folder structure should look like this:
 
 ```
   |
@@ -57,18 +76,23 @@ Download and install the dependencies, then:
   |   +-- src
   |       ...
   |
+  |
+  +-- mod
+  |   |
+  |   +-- src
+  |       ...
+  |
   +-- tmodplay
       |
       +-- emu
       +-- src
+      +-- mod      <- copy your MOD files here
           ...
 ```
 
-- Create the `mod` directory under `tmodplay` and copy some MOD files into this folder for testing.
+## Building the application
 
-### Building the executable
-
-In the project root directory, run `wmake` to create a debug build to `build\debug\tmodplay.exe`. Run `wmake build=release` to create a release build to `build\release\tmodplay.exe`
+In the project root directory, run `wmake` to create a debug build to `build\debug\tmodplay.exe`. Run `wmake build=release` to create a release build to `build\release\tmodplay.exe`. Building `tmodplay` will automatically rebuild `mod` for the same build target (debug or release).
 
 The following `wmake` targets are also available (append after `wmake` or `wmake build=release`):
 
@@ -83,7 +107,8 @@ To speed up the development process, two simple batch files are also provided:
 
 To start DOSBox-X with the same environment as `makedb.bat`, run `emu\dosbox.bat`. You can then manually test the build by running `test.bat` or executing `build\debug\tmodplay.exe` with your custom parameters.
 
-## Why 386 and why protected mode?
+
+# Why 386 and why protected mode?
 
 This project originally targeted the 286 which was very challenging. However it was soon realized that:
 

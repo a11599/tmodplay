@@ -4,6 +4,16 @@
     ProTracker and the numerous clones/derivatives on either the Amiga or
     PC.
 
+    In the package there are two variants:
+
+    - release\tmodplay.exe is the release version without any debug logging.
+      If the application works for you without issues, use this version.
+
+    - debug\tmodplay.exe is compiled to write a debug logfile to
+      tmodplay.log. Use this version if you encounter problems (the log may
+      be helpful to determine the cause of the issue). The performance
+      overhead of logging is negligible.
+
 
   __________________________ Command line parameters _________________________
 

@@ -4,7 +4,7 @@
 
 # Compiler options
 
-nasm_pe_opts = -i "src" -i "../pmi/src" -f win32
+nasm_pe_opts = -i "src" -i "../pmi/src" -i "../mod/src" -f win32
 
 # Build mode
 # Set to "release" in command line parameter to create a release build.
@@ -15,7 +15,8 @@ build = debug
 
 # Target application EXE file without extension
 
-tmodplay = build build\$(build) build\$(build)\obj build\$(build)\obj\mod build\$(build)\obj\gui &
+tmodplay = build build\$(build) build\$(build)\obj build\$(build)\obj\gui &
+	build_mod &
 	build\$(build)\tmodplay.exe
 
 # PMI stub EXE file to link with the application
@@ -52,7 +53,7 @@ watcom_dir = $(watcom_dir)\
 # Build application
 
 incremental: $(tmodplay)
-full: clean $(tmodplay)
+full: clean clean_mod $(tmodplay)
 
 # Create binary distribution package
 
@@ -62,6 +63,9 @@ dist: .SYMBOLIC
 	@if not exist dist mkdir dist
 	@if not exist dist\debug mkdir dist\debug
 	@if not exist dist\release mkdir dist\release
+	@del /q dist\debug\*.*
+	@del /q dist\release\*.*
+	@del /q dist\*.*
 	@copy build\debug\*.exe dist\debug
 	@copy build\release\*.exe dist\release
 	@copy tmodplay.txt dist
@@ -69,10 +73,8 @@ dist: .SYMBOLIC
 # Cleanup
 
 clean: .SYMBOLIC .MULTIPLE
-	@if exist build\$(build)\obj\mod del /q build\$(build)\obj\mod\*.*
 	@if exist build\$(build)\obj\gui del /q build\$(build)\obj\gui\*.*
 	@if exist build\$(build)\obj del /q build\$(build)\obj\*.*
-	@if exist build\$(build)\obj\mod rmdir build\$(build)\obj\mod
 	@if exist build\$(build)\obj\gui rmdir build\$(build)\obj\gui
 	@if exist build\$(build)\obj rmdir build\$(build)\obj
 
@@ -91,15 +93,15 @@ app_objs = &
 	..\pmi\build\$(build)\rtl\systimer.obj &
 	..\pmi\build\$(build)\rtl\keyboard.obj &
 	..\pmi\build\$(build)\rtl\profiler.obj &
+	..\mod\build\$(build)\mod\convert.obj &
+	..\mod\build\$(build)\mod\dev_dac.obj &
+	..\mod\build\$(build)\mod\dev_none.obj &
+	..\mod\build\$(build)\mod\dev_sb.obj &
+	..\mod\build\$(build)\mod\player.obj &
+	..\mod\build\$(build)\mod\routine.obj &
+	..\mod\build\$(build)\mod\wtbl_sw.obj &
 	build\$(build)\obj\gui\setup.obj &
 	build\$(build)\obj\gui\draw.obj &
-	build\$(build)\obj\mod\convert.obj &
-	build\$(build)\obj\mod\dev_dac.obj &
-	build\$(build)\obj\mod\dev_none.obj &
-	build\$(build)\obj\mod\dev_sb.obj &
-	build\$(build)\obj\mod\player.obj &
-	build\$(build)\obj\mod\routine.obj &
-	build\$(build)\obj\mod\wtbl_sw.obj &
 	build\$(build)\obj\tmodplay.obj
 
 # Abort if unknown build environment is given
@@ -119,11 +121,20 @@ build\$(build): build .SYMBOLIC .ALWAYS
 build\$(build)\obj: build\$(build) .SYMBOLIC .ALWAYS
 	@if not exist build\$(build)\obj mkdir build\$(build)\obj
 
-build\$(build)\obj\mod: build\$(build)\obj .SYMBOLIC .ALWAYS
-	@if not exist build\$(build)\obj\mod mkdir build\$(build)\obj\mod
-
 build\$(build)\obj\gui: build\$(build)\obj .SYMBOLIC .ALWAYS
 	@if not exist build\$(build)\obj\gui mkdir build\$(build)\obj\gui
+
+# Build MOD player library
+
+build_mod: .SYMBOLIC
+	@cd ..\mod
+	@wmake build=$(build)
+	@cd ..\tmodplay
+
+clean_mod: .SYMBOLIC
+	@cd ..\mod
+	@wmake build=$(build) clean
+	@cd ..\tmodplay
 
 # Binary build and link
 
@@ -144,12 +155,6 @@ src\gui\api\gui.inc: &
 	src\gui\consts\public.inc
 
 	$(watcom_dir)wtouch src\gui\api\gui.inc
-
-src\mod\api\mod.inc: &
-	src\mod\consts\public.inc &
-	src\mod\structs\public.inc
-
-	$(watcom_dir)wtouch src\mod\api\mod.inc
 
 # .obj file dependencies with included external files and build instructions
 
@@ -172,99 +177,13 @@ build\$(build)\obj\gui\draw.obj: src\gui\draw.asm &
 
 	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
 
-build\$(build)\obj\mod\convert.obj: src\mod\convert.asm
-
-	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
-
-build\$(build)\obj\mod\dev_dac.obj: src\mod\dev_dac.asm &
-	..\pmi\src\pmi\api\pmi.inc &
-	..\pmi\src\rtl\api\string.inc &
-	..\pmi\src\rtl\api\log.inc &
-	..\pmi\src\rtl\api\irq.inc &
-	..\pmi\src\rtl\api\timer.inc &
-	src\mod\config.inc &
-	src\mod\api\wtbl_sw.inc &
-	src\mod\api\routine.inc &
-	src\mod\structs\public.inc &
-	src\mod\consts\public.inc &
-	src\mod\structs\dev.inc &
-	src\mod\consts\dev.inc
-
-	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
-
-build\$(build)\obj\mod\dev_none.obj: src\mod\dev_none.asm &
-	..\pmi\src\pmi\api\pmi.inc &
-	..\pmi\src\rtl\api\string.inc &
-	..\pmi\src\rtl\api\log.inc &
-	..\pmi\src\rtl\api\irq.inc &
-	..\pmi\src\rtl\api\timer.inc &
-	src\mod\api\routine.inc &
-	src\mod\structs\dev.inc
-
-	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
-
-build\$(build)\obj\mod\dev_sb.obj: src\mod\dev_sb.asm &
-	..\pmi\src\pmi\api\pmi.inc &
-	..\pmi\src\rtl\api\env_arg.inc &
-	..\pmi\src\rtl\api\string.inc &
-	..\pmi\src\rtl\api\log.inc &
-	..\pmi\src\rtl\api\irq.inc &
-	src\mod\config.inc &
-	src\mod\api\wtbl_sw.inc &
-	src\mod\api\routine.inc &
-	src\mod\structs\public.inc &
-	src\mod\consts\public.inc &
-	src\mod\structs\dev.inc &
-	src\mod\consts\dev.inc
-
-	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
-
-build\$(build)\obj\mod\player.obj: src\mod\player.asm &
-	..\pmi\src\pmi\api\pmi.inc &
-	..\pmi\src\rtl\api\env_arg.inc &
-	..\pmi\src\rtl\api\string.inc &
-	..\pmi\src\rtl\api\log.inc &
-	src\mod\config.inc &
-	src\mod\api\convert.inc &
-	src\mod\api\routine.inc &
-	src\mod\structs\public.inc &
-	src\mod\consts\public.inc &
-	src\mod\structs\mod_file.inc &
-	src\mod\structs\dev.inc
-
-	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
-
-build\$(build)\obj\mod\routine.obj: src\mod\routine.asm &
-	..\pmi\src\pmi\api\pmi.inc &
-	..\pmi\src\rtl\api\string.inc &
-	..\pmi\src\rtl\api\log.inc &
-	src\mod\config.inc &
-	src\mod\api\convert.inc &
-	src\mod\structs\public.inc &
-	src\mod\structs\mod_file.inc &
-	src\mod\consts\dev.inc &
-	src\mod\structs\dev.inc
-
-	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
-
-build\$(build)\obj\mod\wtbl_sw.obj: src\mod\wtbl_sw.asm &
-	..\pmi\src\pmi\api\pmi.inc &
-	..\pmi\src\rtl\api\string.inc &
-	..\pmi\src\rtl\api\log.inc &
-	src\mod\config.inc &
-	src\mod\structs\public.inc &
-	src\mod\consts\dev.inc &
-	src\mod\structs\mod_file.inc
-
-	$(nasm_dir)nasm $(nasm_pe_opts) $[@ -o $^@
-
 build\$(build)\obj\tmodplay.obj: src\tmodplay.asm &
 	..\pmi\src\pmi\api\pmi.inc &
 	..\pmi\src\rtl\api\env_arg.inc &
 	..\pmi\src\rtl\api\string.inc &
 	..\pmi\src\rtl\api\log.inc &
 	src\gui\api\gui.inc &
-	src\mod\api\mod.inc &
+	..\mod\src\mod\api\mod.inc &
 	src\fonts\rpgsys.inc &
 	src\fonts\sgk075.inc &
 	src\fonts\digits.inc
