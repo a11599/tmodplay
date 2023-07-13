@@ -1,1 +1,1 @@
-kate: indent-width 8; remove-trailing-spaces all; replace-tabs false; replace-tabs-save false; syntax Intel x86 (NASM); tab-indents true; tab-width 8; word-wrap-column 80;
+kate: dynamic-word-wrap false; indent-width 8; remove-trailing-spaces all; replace-tabs false; replace-tabs-save false; syntax Intel x86 (NASM); tab-indents true; tab-width 8; word-wrap-column 80;
