@@ -20,18 +20,15 @@ This is the modern remake of a multichannel [MOD](https://en.wikipedia.org/wiki/
 
 ![Screenshot playing dope.mod](tmodplay.png)
 
-It requires a 386 or above running MS-DOS or Windows 9x/ME, or an emulator such as DOSBox. It is written in full assembly using [PMI, my own 32-bit protected mode host](https://github.com/a11599/pmi) and [mod, my own MOD player library for PMI](https://github.com/a11599/mod). The MOD player supports ProTracker format and its close derivates up to 32 channels on the following sound cards:
+It requires a 386 or above running MS-DOS or Windows 9x/ME, or an emulator such as DOSBox. It is written in full assembly using [PMI, a 32-bit protected mode host](https://github.com/a11599/pmi) and [mod, a MOD player library for PMI](https://github.com/a11599/mod). The MOD player supports ProTracker format and its close derivates up to 32 channels on the following sound cards:
 
 - PC speaker up to 29 kHz sample rate
-- LPT DAC variants (single, dual, stereo) up to 100 kHz sample rate
+- LPT DAC variants (single, dual, stereo) up to 44.1 kHz sample rate
 - Sound Blaster, Pro and 16 up to 22/44.1 kHz sample rate (depending on actual model)
 
-An extremely optimized software wavetable with 16-bit mixing, optional linear and trilinear Watte interpolation upsampling is included for non-wavetable sound cards (all of them for now, but at least GUS support is planned in the future). Stereo is supported with hard pan or 75% crossfeed. True stereo panning via 8xx and E8x MOD commands is also available.
+An extremely optimized software wavetable with 16-bit mixing, optional linear and trilinear Watte interpolation upsampling is included for non-wavetable sound cards (all of them for now, but at least GUS support is planned in the future). Stereo is supported with hard pan or 75% crossfeed. True stereo panning via `8xx` and `E8x` MOD commands is also available.
 
-The main development platform is a modern PC with DOSBox, but the result is always tested (also some parts are developed) on actual retro hardware:
-
-- VIA MVP4 / Pentium MMX 233@250 MHz / Sound Blaster 16 Vibra16S (CT2800) ISA / Hercules S3 Trio64V+ PCI / MS-DOS 7.0
-- SIS 650GX/962LUA / Pentium 4 2.66 GHz / Avance Logic ALS-4000 PCI / nVidia Geforce 440MX 64 MB AGP / MS-DOS 7.0
+The main development platform is a modern PC with DOSBox-X, but the result is always tested (also some parts are developed) on the following retro hardware: Abit BX6 2.0 (Intel 440BX chipset), Intel Pentium II 350 MHz, Sound Blaster 16 Vibra16S (CT2800) ISA, Serdaco CVX4 (LPT DAC), PicoGUS v2.0 and nVidia Geforce 440MX 64 MB AGP running Windows 98 SE and MS-DOS 7.0.
 
 
 # Usage
@@ -49,7 +46,7 @@ The app can be built under DOS and Windows. The build uses the following toolcha
 - [Open Watcom](http://www.openwatcom.org/) to make the project and link the executable binary.
 - (optional) [DOSBox-X](https://dosbox-x.com/) to test the build on a modern PC.
 
-The build toolchain is also available for Linux, but I only build under DOS and Windows.
+The build toolchain is also available for Linux, but the build system only supports DOS and Windows.
 
 Download and install the dependencies, then:
 

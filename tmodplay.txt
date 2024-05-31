@@ -62,7 +62,7 @@
     /sr:samplerate
 
     Set the output (playback, mixing) sample rate. Accepted value is a
-    number between 8000 - 100000. Output devices have specific upper limits
+    number between 8000 - 44100. Output devices have specific upper limits
     on sample rate. These upper limits will be enforced even if a higher
     amount is specified. Devices may also not support any arbitrary number.
     For such devices, the actual sample rate (which can be observed in the
@@ -147,6 +147,9 @@
     speaker uses the timer interrupt (IRQ 0) at the specified sample rate
     for audio playback.
 
+    Changing the sample rate during playback will reinitialize the device,
+    which causes a momentary discontinuity.
+
 
     Parallel port DAC
     -----------------
@@ -188,28 +191,22 @@
     BIOS doesn't recognize it for some reason, specify the hexadecimal I/O
     port of the parallel port instead of lptX and/or lptY directly.
 
-    Setup 3's setup is identical to setup 1, but you need to use /o:lptst.
-    These things are pretty rare (were rare even back in the day as their
-    cost was rivaling real sound cards). tmodplay uses the strobe and auto
-    linefeed pins to select output channel the following way:
+    Setup 3's configuration is identical to setup 1, but you need to use
+    /o:lptst. These things are pretty rare (were rare even back in the day
+    as their cost was rivaling real sound cards). tmodplay uses the strobe
+    and auto linefeed pins to select output channel the following way:
 
     - Strobe (pin 1): output on left channel when high
     - Auto line feed (pin 14): output on right channel when high
 
-    For mono output, tmodplay sets both strobe and auto line feed to high to
-    enable both channels. Not all stereo-on-1 devices implement this (some
-    only use strobe or auto line feed to toggle left/right) and hence may
-    only play mono audio on one channel (either left or right, depending on
-    implementation).
-
     Parallel port DAC playback uses the timer interrupt (IRQ 0) at the
-    specified sample rate. The maximum supported value is 100000 Hz, but
-    this is more like a gem, rather than a useful feature. Timer interrupts
-    at this rate use a lot of CPU and output quality won't really improve.
-    You are better served by spending CPU time on a better quality
-    interpolation.
+    specified sample rate. The maximum supported value is 44100 Hz.
 
     Arguments /i and /d are ignored by this device.
+
+    Changing the sample rate or switching between mono and stereo output
+    during playback will reinitialize the device, which causes a momentary
+    discontinuity.
 
 
     Sound Blaster
@@ -229,7 +226,7 @@
       22222 Hz.
     - Sound Blaster 2.0: 8-bit mono playback up to 43478 Hz.
     - Sound Blaster Pro: 8-bit mono playback up to 43478 Hz or 8-bit stereo
-      playback up to 22222 Hz.
+      playback up to 21739 Hz.
     - Sound Blaster 16: 16-bit mono or stereo playback up to 44100 Hz.
 
     If the BLASTER environment variable is present, tmodplay will parse it
@@ -272,6 +269,10 @@
     Sound Blasters also have all sorts of other quirks, but none of them are
     relevant for tmodplay.
 
+    Changing the sample rate or switching between mono and stereo output
+    during playback will reinitialize the device, which causes a momentary
+    discontinuity.
+
 
   ______________________________ User interface ______________________________
 
@@ -304,16 +305,45 @@
     + / Volume +: Increase amplification
     - / Volume -: Decrease amplification
     0: Reset amplification to 1.0x
-    Left / Up / Page Up: Jump back to previous pattern sequence
-    Right / Down / Page Down: Jump to next pattern sequence
+    Left / Up: Jump back to previous pattern sequence
+    Right / Down: Jump to next pattern sequence
     Home: Restart module
+    Page Up: Increase sample rate
+    Page Down: Decrease sample rate
     W: Use Watte trilinear sample interpolation
     L: Use linear sample interpolation
     N: Use nearest neighbor interpolation (also known as zero order hold or
        no interpolation, although the latter is technically not correct)
     I: Toggle interpolation method (nearest -> linear -> Watte)
+    M: Force mono output
     H: Set Amiga-style hard panning
     X: Set Amiga-style hard panning with 75% crossfade
     R: Set real stereo panning, channels are positioned between left and
        right as specified via 8xx and E8x MOD commands
-    S: Toggle stereo panning method (hard -> 75% crossfade -> real)
+    S: Toggle stereo panning method (hard -> 75% crossfade -> real -> mono)
+
+
+  ________________________________ Changelog _________________________________
+
+    version 1.1
+    -----------
+
+    - LPT DAC sample rate now capped at 44100 Hz. 100 kHz was really just a
+      useless gimmick.
+    - Stereo-on-1 LPT DAC in mono mode now outputs the same sample to both
+      channels instead of setting up a possibly unsupported mono
+      configuration. This increases compatibility with existing hardware,
+      but reduces performance (you probably want stereo anyways).
+    - Output can be changed from mono to stereo and back during playback.
+    - Sample rate can be changed during playback. Emulators may wreak havoc
+      when doing this with LTP DAC or speaker output, but it's working fine
+      on actual hardware.
+    - Fixed a small bug that corrupted initial pan after a manual song
+      restart.
+    - Very small style adjustments.
+
+
+    version 1.0
+    -----------
+
+    First release.

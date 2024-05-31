@@ -47,7 +47,7 @@ SMP_COL_HEIGHT	EQU 16 * 16
 
 ; Constants for help screen rendering
 
-HELP_KEY_WIDTH	EQU 240
+HELP_KEY_WIDTH	EQU 230			; Column width of keys
 
 ; CPU usage window in systimer ticks
 
@@ -71,6 +71,7 @@ RMS_BAR_COL	EQU 0x0b		; RMS meter bar color
 UI_UPD_SOUND	EQU 0x00000001		; Sound settings needs to be updated
 UI_UPD_PAN	EQU 0x00000002		; Stereo panning needs to be updated
 UI_KBD_HELP	EQU 0x00000004		; Keyboard help screen is displayed
+UI_UPD_DEV	EQU 0x00000008		; Device needs to be updated
 
 
 ;------------------------------------------------------------------------------
@@ -223,18 +224,21 @@ _main:
 	call mod_set_interpolation
 
 .auto_stereo_mode:
+	mov al, [dev_params + mod_dev_params.stereo_mode]
 
 	; Set real stereo mode if pan effects are present
 
 	test byte [arg_flags], ARG_PAN_SET
-	jnz .init_player
+	jnz .set_stereo_mode
 	test ecx, MOD_FLG_PAN
-	jz .init_player
+	jz .set_stereo_mode
 
 	log LOG_INFO, {'MOD uses pan command, choosing real stereo mode', 13, 10}
 	mov al, MOD_PAN_REAL
-	mov [dev_params + mod_dev_params.stereo_mode], al
+
+.set_stereo_mode:
 	call mod_set_stereo_mode
+	mov [dev_params + mod_dev_params.stereo_mode], al
 
 .init_player:
 	call ui_open			; Initialize GUI
@@ -416,6 +420,7 @@ parse_args:
 	mov byte [ebx + mod_dev_params.interpolation], MOD_IPOL_NN
 	mov byte [ebx + mod_dev_params.stereo_mode], MOD_PAN_CROSS
 	mov byte [ebx + mod_dev_params.initial_pan], 0x80
+	mov byte [ebx + mod_dev_params.flags], MOD_FLG_FMT_CHG | MOD_FLG_SR_CHG
 	mov dword [ebx + mod_dev_params.buffer_size], 17000
 
 	;----------------------------------------------------------------------
@@ -1090,15 +1095,11 @@ ui_run:
 	call mod_get_output_info
 	mov bl, [output_info + mod_output_info.buffer_format]
 	and bl, MOD_BUF_CHANNEL
+	mov [output_channels], bl
+	mov ecx, [output_info + mod_output_info.sample_rate]
 	mov ecx, [gui_scr_width]
 	shr ecx, 1
-	cmp bl, MOD_BUF_2CHN
-	jne .mono
 	sub ecx, SCOPE_WIDTH * 64 + SCOPE_PADDING * 8
-	jmp .use_margin
-
-.mono:
-	sub ecx, SCOPE_WIDTH * 64
 
 .use_margin:
 	mov [pane_margin], ecx
@@ -1173,6 +1174,15 @@ ui_run:
 
 	; Draw scopes and RMS bars to the screen (do early to avoid tearing)
 
+	mov bl, [output_info + mod_output_info.buffer_format]
+	and bl, MOD_BUF_CHANNEL
+	cmp [output_channels], bl	; Redraw scopes when number of output
+	je .draw_scopes			; channels changed
+	mov [output_channels], bl
+	call clear_scope_area
+	call draw_scope_lines
+
+.draw_scopes:
 	call draw_scopes
 	test dword [ui_flags], UI_KBD_HELP
 	jnz .skip_rms
@@ -1195,6 +1205,12 @@ ui_run:
 
 	; Update sound settings
 
+	test dword [ui_flags], UI_UPD_DEV
+	jz .sound_settings
+	call draw_output_device
+	and dword [ui_flags], ~UI_UPD_DEV
+
+.sound_settings:
 	test dword [ui_flags], UI_UPD_SOUND
 	jz .stereo_mode
 	call draw_sound_settings
@@ -1306,8 +1322,10 @@ ui_run:
 	dd KC_KP_PLUS, KC_MM_VOL_UP, 0, .vol_up
 	dd KC_KP_MINUS, KC_MM_VOL_DOWN, 0, .vol_down
 	dd KC_KP_0, 0, .vol_reset
-	dd KC_CURSOR_LEFT, KC_CURSOR_UP, KC_PAGE_UP, 0, .seq_prev
-	dd KC_CURSOR_RIGHT, KC_CURSOR_DOWN, KC_PAGE_DOWN, 0, .seq_next
+	dd KC_CURSOR_LEFT, KC_CURSOR_UP, 0, .seq_prev
+	dd KC_CURSOR_RIGHT, KC_CURSOR_DOWN, 0, .seq_next
+	dd KC_PAGE_UP, 0, .sr_increase
+	dd KC_PAGE_DOWN, 0, .sr_decrease
 	dd KC_HOME, 0, .seq_first
 	dd KC_F1, 0, .kbd_help_toggle
 	dd -1				; Check against ASCII codes from now
@@ -1318,6 +1336,7 @@ ui_run:
 	dd 'l', 'L', 0, .ipol_linear
 	dd 'n', 'N', 0, .ipol_nn
 	dd 'i', 'I', 0, .ipol_toggle
+	dd 'm', 'M', 0, .pan_mono
 	dd 'h', 'H', 0, .pan_hard
 	dd 'x', 'X', 'c', 'C', 0, .pan_cross
 	dd 'r', 'R', 0, .pan_real
@@ -1407,14 +1426,16 @@ ui_run:
 	mov al, MOD_PAN_HARD
 
 .set_pan:
+	test dword [ui_flags], UI_UPD_PAN
+	jnz .handle_keyboard		; Needs a UI loop to update mod state
 	mov ah, [dev_params + mod_dev_params.stereo_mode]
-	cmp ah, MOD_PAN_MONO
+	cmp ah, al
 	je .handle_keyboard
+	call mod_set_stereo_mode
 	cmp ah, al
 	je .handle_keyboard
 	mov [dev_params + mod_dev_params.stereo_mode], al
-	or dword [ui_flags], UI_UPD_PAN
-	call mod_set_stereo_mode
+	or dword [ui_flags], UI_UPD_PAN | UI_UPD_DEV
 	jmp .handle_keyboard
 
 	; Use 75% crossfeed with Amiga-style hard panning
@@ -1429,7 +1450,13 @@ ui_run:
 	mov al, MOD_PAN_REAL
 	jmp .set_pan
 
-	; Toggle stereo mode: hard -> cross -> real -> hard ...
+	; Force output to mono
+
+.pan_mono:
+	mov al, MOD_PAN_MONO
+	jmp .set_pan
+
+	; Toggle stereo mode: hard -> cross -> real -> mono -> hard ...
 
 .pan_toggle:
 	mov al, [dev_params + mod_dev_params.stereo_mode]
@@ -1437,6 +1464,8 @@ ui_run:
 	je .pan_cross
 	cmp al, MOD_PAN_CROSS
 	je .pan_real
+	cmp al, MOD_PAN_REAL
+	je .pan_mono
 	jmp .pan_hard
 
 	; Next pattern in sequence
@@ -1470,6 +1499,62 @@ ui_run:
 .seq_first:
 	xor ah, ah
 	jmp .set_seq
+
+	; Increase sample rate
+
+.sr_increase:
+	test dword [ui_flags], UI_UPD_DEV
+	jnz .handle_keyboard		; Needs a UI loop to update mod state
+	mov eax, 1			; Get next closest sample rate
+	call mod_get_nearest_sample_rate
+	mov ecx, eax			; Increase by 1000 Hz when less increase
+	mov ebx, [output_info + mod_output_info.sample_rate]
+	sub ecx, eax
+	cmp ecx, 1000
+	jae .set_sample_rate
+	mov eax, [output_info + mod_output_info.sample_rate]
+	add eax, 1000
+	call .snap_sr			; Snap to "standard" values
+
+.set_sample_rate:
+	call mod_set_sample_rate
+	or dword [ui_flags], UI_UPD_DEV
+	jmp .handle_keyboard
+
+.snap_sr:
+	mov ebx, sr_stdtab
+
+.check_std_sample_rate_loop:
+	mov ecx, eax
+	sub ecx, [ebx]
+	cmp ecx, 500			; Snap to "standard" value within 500 Hz
+	jg .check_std_sample_rate_loop_next
+	cmp ecx, -500
+	jl .check_std_sample_rate_loop_next
+	mov eax, [ebx]
+	ret
+
+.check_std_sample_rate_loop_next:
+	add ebx, 4
+	cmp ebx, SR_STDTAB_END
+	jb .check_std_sample_rate_loop
+	ret
+
+	; Decrease sample rate
+
+.sr_decrease:
+	test dword [ui_flags], UI_UPD_DEV
+	jnz .handle_keyboard		; Needs a UI loop to update mod state
+	mov eax, -1			; Get previous closest sample rate
+	call mod_get_nearest_sample_rate
+	mov ebx, [output_info + mod_output_info.sample_rate]
+	sub ebx, eax			; Decrease by 1000 Hz when less decrease
+	cmp ebx, 1000
+	jae .set_sample_rate
+	mov eax, [output_info + mod_output_info.sample_rate]
+	sub eax, 1000
+	call .snap_sr
+	jmp .set_sample_rate
 
 	; Toggle keyboard help info display
 
@@ -1905,14 +1990,7 @@ draw_stereo_mode:
 	je .mono
 	movzx eax, byte [dev_params + mod_dev_params.stereo_mode]
 	cmp al, MOD_PAN_MONO
-	je .done
-	cmp al, MOD_PAN_REAL
 	jne .get_string
-	cmp byte [dev_params + mod_dev_params.initial_pan], 0x80
-	jne .get_string
-	mov esi, [mod_info_addr]
-	test dword [esi + mod_info.flags], MOD_FLG_PAN
-	jnz .get_string
 
 .mono:
 	mov esi, umsg_pan_mono
@@ -2046,14 +2124,20 @@ draw_sample_names:
 
 	; Print header above sample names
 
-	mov al, GUI_AL_LEFT
+	mov al, GUI_AL_CENTER
 	mov ebx, umsg_samples
-	mov ecx, SMP_COL_WIDTH * 2
+	mov ecx, SMP_COL_WIDTH
 	mov edx, INFO_TEXT_COL
 	mov esi, [sample_col_1_x]
 	mov edi, [sample_col_top]
 	sub edi, 16
 	mov ebp, font_digits
+	call gui_draw_text
+
+	; Print help text
+
+	mov ebx, umsg_help
+	mov esi, [sample_col_2_x]
 	call gui_draw_text
 
 	; Print sample names in two columns
@@ -2159,16 +2243,16 @@ umsg_kbd_m_ %+ umsg_kbd_idx:
 
 	umsg_kbd_help 'Esc', 'Quit to DOS'
 	umsg_kbd_help 'F1', 'Toggle keyboard help / sample name display'
-	umsg_kbd_help '+, Volume +', 'Increase amplification'
-	umsg_kbd_help '-, Volume -', 'Decrease amplification'
+	umsg_kbd_help '+/-, Volume +/-', 'Increase / decrease amplification'
 	umsg_kbd_help '0', 'Reset amplification to 1.0x'
-	umsg_kbd_help 'Left, Up, Page Up', 'Jump back to previous pattern sequence'
-	umsg_kbd_help 'Right, Down, Page Down', 'Jump to next pattern sequence'
+	umsg_kbd_help 'Left/Right, Up/Down', 'Jump to previous / next pattern sequence'
 	umsg_kbd_help 'Home', 'Restart module'
+	umsg_kbd_help 'Page Up/Page Down', 'Increase / decrease sample rate'
 	umsg_kbd_help 'W', 'Use Watte trilinear sample interpolation'
 	umsg_kbd_help 'L', 'Use linear sample interpolation'
 	umsg_kbd_help 'N', 'Use nearest neighbor (no) sample interpolation'
 	umsg_kbd_help 'I', 'Toggle interpolation method'
+	umsg_kbd_help 'M', 'Force output to mono'
 	umsg_kbd_help 'H', 'Set Amiga-style hard stereo panning'
 	umsg_kbd_help 'X', 'Set hard stereo panning with 75% crossfade'
 	umsg_kbd_help 'R', 'Set real stereo panning (MOD commands 8xx and E8x)'
@@ -2178,14 +2262,13 @@ section .text
 
 draw_keyboard_help:
 
-	; Print header above sample names
+	; Print header
 
-	mov al, GUI_AL_LEFT
+	mov al, GUI_AL_CENTER
 	mov ebx, umsg_kbd
 	mov ecx, [gui_scr_width]
-	sub ecx, HELP_KEY_WIDTH
 	mov edx, INFO_TEXT_COL
-	mov esi, HELP_KEY_WIDTH
+	xor esi, esi
 	mov edi, [sample_col_top]
 	sub edi, 16
 	mov ebp, font_digits
@@ -2235,6 +2318,27 @@ draw_keyboard_help:
 
 
 ;------------------------------------------------------------------------------
+; Clear scope area.
+;------------------------------------------------------------------------------
+; <- Destroys everything except segment registers.
+;------------------------------------------------------------------------------
+
+clear_scope_area:
+	mov ebx, SCOPE_HEIGHT
+	mov ecx, (SCOPE_WIDTH * 64 + SCOPE_PADDING * 8) * 2
+	mov esi, [pane_margin]
+	mov edi, SCOPE_TOP
+	xor dl, dl
+	call gui_draw_box
+
+	mov edi, [scope_bmp_addr]	; Clear oscilloscope bitmap
+	mov ecx, SCOPE_BMP_SIZE / 2
+	xor eax, eax
+	rep stosd
+	ret
+
+
+;------------------------------------------------------------------------------
 ; Draw scope lines to the GUI. Requires up-to-date data in output_info.
 ;------------------------------------------------------------------------------
 ; <- Destroys everything except segment registers.
@@ -2257,6 +2361,7 @@ draw_scope_lines:
 .mono_scope:
 	mov ebx, 1
 	mov ecx, SCOPE_WIDTH * 64 * 2
+	add esi, SCOPE_PADDING * 8
 	call .draw_lines
 
 .done:
@@ -2317,6 +2422,7 @@ draw_scopes:
 
 	; Draw one larger scope in mono output mode
 
+	add esi, SCOPE_PADDING * 8
 	mov ecx, SCOPE_HEIGHT * 256 + SCOPE_WIDTH * 2
 	call gui_blit_bitmap_interleave
 
@@ -2996,6 +3102,7 @@ umsg_pan_real	db 'Real stereo', 0
 umsg_channels	db '{u} channels', 0
 umsg_samples	db 'Samples / song message', 0
 umsg_kbd	db 'Keyboard commands', 0
+umsg_help	db 'Press F1 for help', 0
 
 		alignb 4
 umsg_devtab	dd MOD_OUT_DAC * 256 + MOD_DAC_SPEAKER, umsg_dev_spkr
@@ -3229,6 +3336,11 @@ vga_palette	db  0,  0,  0		; 00: background (black)
 		db  9, 31, 33		; 0B: RMS meter bar color
 		VGA_PALETTE_ENTRIES EQU ($ - vga_palette) / 3
 
+		; List of "standard" sample rates
+
+sr_stdtab	dd 8000, 11025, 16000, 22050, 32000, 44100
+		SR_STDTAB_END EQU $
+
 		; RMS square table
 
 rms_sqtab	dw 0, 4, 8, 9, 16, 25, 36, 49
@@ -3354,5 +3466,7 @@ ui_flags	resd 1			; UI flags
 pane_margin	resd 1			; Margin (X coordinate) of panes
 sample_rms	resd 31			; RMS values for each sample
 
+sample_rate	resd 1			; Current sample rate
 output_device	resw 1			; Output device
 amplification	resw 1			; Amplification
+output_channels	resb 1			; Output bistream channel number info
