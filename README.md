@@ -13,6 +13,8 @@ _a 32-bit protected mode DOS player for MOD music format_
 - Real stereo mode for MODs utilizing panning commands
 - 640x480 graphical user interface with scopes and RMS meters
 
+A browser/Javascript based version is available at https://github.com/a11599/tmodplay-js with a few additional features. Try it online at https://a11599.github.io/tmodplay-js/!
+
 
 # Primer
 
