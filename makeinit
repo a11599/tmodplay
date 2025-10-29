@@ -1,0 +1,21 @@
+!include env
+
+# Use correct path separator for platform
+
+!ifdef __UNIX__
+ps = /
+del = rm
+copy = cp
+!else
+ps = \
+del = del /q
+copy = copy
+!endif
+
+# Append path separator at the end of watcom path variables if not empty
+
+watcom_bin_dir = $(WATCOM_BIN_DIR)
+nasm_bin = $(NASM_BIN)
+!ifneq watcom_bin_dir
+watcom_bin_dir = $(watcom_bin_dir)$(ps)
+!endif
